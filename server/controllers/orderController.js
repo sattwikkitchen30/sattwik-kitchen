@@ -5,18 +5,68 @@ const Product = require('../models/Product');
 const { TIFFIN_PRICES, tiffinDisplayName, ORDER_STATUSES, DELIVERY_STATUSES, STATUS_TRANSITIONS } = require('../utils/constants');
 const { emitOrderUpdate } = require('../utils/orderEvents');
 
+// ONLY these 6 items are orderable - everything else is display-only
+const ORDERABLE_ITEMS = new Set([
+  'Full Meal Package (Single)',
+  'Full Meal Package (Couple)', 
+  'Full Meal Package (Family)',
+  'Curry-Only Package (Single)',
+  'Curry-Only Package (Couple)',
+  'Curry-Only Package (Family)',
+  'Full Meal Package: Single',
+  'Full Meal Package: Couple',
+  'Full Meal Package: Family',
+  'Curry-Only Package: Single',
+  'Curry-Only Package: Couple',
+  'Curry-Only Package: Family',
+  'Curry option 1',
+  'Curry option 2',
+  'Curry option 3'
+]);
+
+function isOrderableItem(itemName) {
+  if (!itemName || typeof itemName !== 'string') return false;
+  const trimmed = itemName.trim();
+  if (ORDERABLE_ITEMS.has(trimmed)) return true;
+  // Handle prefixes like "Tiffin Plan — " or "Tiffin Plan - "
+  const unPrefixed = trimmed.replace(/^Tiffin Plan\s*[-—–]\s*/i, '').trim();
+  if (ORDERABLE_ITEMS.has(unPrefixed)) return true;
+  // Handle colon format: "Full Meal Package: Single" -> "Full Meal Package (Single)"
+  const normalized = unPrefixed.replace(/:\s*([A-Za-z]+)/, ' ($1)');
+  if (ORDERABLE_ITEMS.has(normalized)) return true;
+  return false;
+}
+
 async function createOrder(req, res) {
-  if (!req.customer) return res.status(401).json({ message: 'Customer sign-in required before placing an order.' });
+  if (!req.customer || !req.customer._id) {
+    return res.status(401).json({ message: 'Customer sign-in required before placing an order.' });
+  }
+
+  const customerDoc = await Customer.findById(req.customer._id);
+  if (!customerDoc) {
+    return res.status(401).json({ message: 'Customer account no longer exists.' });
+  }
+
   const { items = [], tiffinPlans = [], customRequest = '', customAmount = 0, type = 'product' } = req.body || {};
 
-  const firstName = String(req.customer.firstName || '').trim();
-  const lastName = String(req.customer.lastName || '').trim();
-  const phone = String(req.customer.phone || '').trim();
-  const email = String(req.customer.email || '').trim().toLowerCase();
-  const area = String(req.customer.area || '').trim();
+  const firstName = String(customerDoc.firstName || req.customer.firstName || '').trim();
+  const lastName = String(customerDoc.lastName || req.customer.lastName || '').trim();
+  const phone = String(customerDoc.phone || req.customer.phone || '').trim();
+  const email = String(customerDoc.email || req.customer.email || '').trim().toLowerCase();
+  const area = String(req.body?.customer?.area || customerDoc.area || req.customer.area || '').trim();
+  const address = String(req.body?.customer?.address || customerDoc.address || req.customer.address || '').trim();
 
   if (!firstName || !lastName || !phone || !email.includes('@')) {
     return res.status(400).json({ message: 'Please provide first name, last name, phone and a valid email.' });
+  }
+
+  if (area && !customerDoc.area) {
+    customerDoc.area = area;
+    await customerDoc.save();
+  }
+  if (address && !customerDoc.address) {
+    customerDoc.address = address;
+    await customerDoc.save();
   }
 
   const orderItems = [];
@@ -34,6 +84,12 @@ async function createOrder(req, res) {
         if (!product) {
           return res.status(400).json({ message: `Invalid or inactive product: ${raw.productId}` });
         }
+        
+        // ONLY allow the 6 specific orderable items
+        if (!isOrderableItem(product.name)) {
+          return res.status(400).json({ message: `Only Full Meal Packages and Curry options can be ordered. ${product.name} is display-only.` });
+        }
+        
         const quantity = Math.max(1, Math.min(99, parseInt(raw.quantity, 10) || 1));
         if (product.stock === 0) {
           return res.status(400).json({ message: `${product.name} is currently out of stock.` });
@@ -52,6 +108,11 @@ async function createOrder(req, res) {
           subtotal
         });
       } else if (raw.productName && (Number(raw.price || raw.priceAtPurchase) >= 0)) {
+        // For custom items (without productId), also validate they are orderable
+        if (!isOrderableItem(raw.productName)) {
+          return res.status(400).json({ message: `Only Full Meal Packages and Curry options can be ordered. ${raw.productName} is display-only.` });
+        }
+        
         const price = Math.round(Number(raw.price || raw.priceAtPurchase) * 100) / 100;
         const quantity = Math.max(1, Math.min(99, parseInt(raw.quantity, 10) || 1));
         const subtotal = Math.round(price * quantity * 100) / 100;
@@ -79,6 +140,12 @@ async function createOrder(req, res) {
       }
       const quantity = Math.max(1, parseInt(tp.quantity, 10) || 1);
       const name = tiffinDisplayName(tp.packageType, tp.size);
+      
+      // ONLY allow the 6 specific orderable items
+      if (!isOrderableItem(name)) {
+        return res.status(400).json({ message: `Only Full Meal Packages and Curry options can be ordered. ${name} is display-only.` });
+      }
+      
       const subtotal = price * quantity;
       totalAmount += subtotal;
       orderItems.push({
@@ -120,9 +187,6 @@ async function createOrder(req, res) {
 
   totalAmount = Math.round(totalAmount * 100) / 100;
 
-  const customerDoc = await Customer.findById(req.customer._id);
-  if (!customerDoc) return res.status(401).json({ message: 'Customer account no longer exists.' });
-
   const order = await Order.create({
     customer: customerDoc._id,
     customerId: customerDoc._id,
@@ -131,7 +195,7 @@ async function createOrder(req, res) {
     tiffinPlan: tiffinPlanMeta,
     customRequest: cleanCustom,
     totalAmount,
-    deliveryAddress: customerDoc.address || area,
+    deliveryAddress: address || area || customerDoc.address || customerDoc.area || '',
     status: 'PENDING',
     placedAt: new Date()
   });
@@ -169,30 +233,39 @@ async function createOrder(req, res) {
 }
 
 async function listOrders(req, res) {
-  const { status, type, area, search, sort = '-createdAt', page = 1, limit = 15, from, to } = req.query;
+  const { status, type, area, search, sort = '-createdAt', page = 1, limit = 50, from, to } = req.query;
   const match = {};
-  if (status) match.status = status;
+  if (status) match.status = new RegExp(`^${status}$`, 'i');
   if (type) match.type = type;
   if (from || to) {
     match.createdAt = {};
     if (from) match.createdAt.$gte = new Date(from + 'T00:00:00.000Z');
     if (to) match.createdAt.$lte = new Date(to + 'T23:59:59.999Z');
   }
-  if (area) match.area = new RegExp(area, 'i');
-  if (search) {
+  if (area) {
     match.$or = [
-      { orderId: new RegExp(search, 'i') },
-      { customerName: new RegExp(search, 'i') }
+      { 'customerDoc.area': new RegExp(area, 'i') },
+      { deliveryAddress: new RegExp(area, 'i') }
+    ];
+  }
+  if (search) {
+    const searchRegex = new RegExp(search, 'i');
+    match.$or = [
+      { orderId: searchRegex },
+      { 'customerDoc.firstName': searchRegex },
+      { 'customerDoc.lastName': searchRegex },
+      { 'customerDoc.email': searchRegex },
+      { 'customerDoc.phone': searchRegex }
     ];
   }
 
   const safeSort = ['createdAt', '-createdAt', 'totalAmount', '-totalAmount', 'status', '-status'].includes(sort) ? sort : '-createdAt';
   const p = Math.max(1, parseInt(page, 10) || 1);
-  const l = Math.min(100, Math.max(1, parseInt(limit, 10) || 15));
+  const l = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
 
   const pipeline = [
     { $lookup: { from: 'customers', localField: 'customer', foreignField: '_id', as: 'customerDoc' } },
-    { $unwind: '$customerDoc' },
+    { $unwind: { path: '$customerDoc', preserveNullAndEmptyArrays: true } },
     { $lookup: { from: 'deliverymembers', localField: 'deliveryMemberId', foreignField: '_id', as: 'deliveryMemberDoc' } },
     { $unwind: { path: '$deliveryMemberDoc', preserveNullAndEmptyArrays: true } }
   ];

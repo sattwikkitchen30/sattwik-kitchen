@@ -285,7 +285,7 @@ async function renderOrdersTable() {
     <table>
       <thead>
         <tr>
-          <th>Order</th><th>Customer</th><th>Type</th><th>Date</th><th>Status</th><th>Delivery member</th><th>Total</th>
+          <th>Order</th><th>Customer</th><th>Items</th><th>Type</th><th>Date</th><th>Status</th><th>Delivery member</th><th>Total</th>
         </tr>
       </thead>
       <tbody>
@@ -293,11 +293,12 @@ async function renderOrdersTable() {
           <tr>
             <td>${order.orderId}</td>
             <td>${order.customerDoc ? `${order.customerDoc.firstName} ${order.customerDoc.lastName}` : '—'}</td>
+            <td>${(order.items || []).map((it) => `${it.productName} × ${it.quantity}`).join('<br>') || (order.customRequest ? `Custom: ${order.customRequest}` : '—')}</td>
             <td>${order.type}</td>
             <td>${dateLabel(order.createdAt)}</td>
             <td>
               <select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}">
-                ${['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'].map((status) => `<option value="${status}" ${order.status === status ? 'selected' : ''}>${status.replaceAll('_', ' ')}</option>`).join('')}
+                ${['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].map((status) => `<option value="${status}" ${order.status === status ? 'selected' : ''}>${status.replaceAll('_', ' ')}</option>`).join('')}
               </select>
               <span class="badge ${String(order.status).toLowerCase()}">${order.status}</span>
             </td>
@@ -310,7 +311,7 @@ async function renderOrdersTable() {
             </td>
             <td>${currency(order.totalAmount)}</td>
           </tr>
-        `).join('') || '<tr><td colspan="7">No orders found</td></tr>'}
+        `).join('') || '<tr><td colspan="8">No orders found</td></tr>'}
       </tbody>
     </table>
   `;

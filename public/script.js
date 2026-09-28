@@ -27,6 +27,104 @@ const customerLogoutBtn = document.getElementById('customerLogoutBtn');
 let customerToken = localStorage.getItem('sattwikCustomerToken') || '';
 const customOrderAmount = document.getElementById('customOrderAmount');
 
+// ONLY these 6 items are orderable - everything else is display-only
+const ORDERABLE_ITEMS = new Set([
+  'Full Meal Package (Single)',
+  'Full Meal Package (Couple)', 
+  'Full Meal Package (Family)',
+  'Curry-Only Package (Single)',
+  'Curry-Only Package (Couple)',
+  'Curry-Only Package (Family)',
+  'Full Meal Package: Single',
+  'Full Meal Package: Couple',
+  'Full Meal Package: Family',
+  'Curry-Only Package: Single',
+  'Curry-Only Package: Couple',
+  'Curry-Only Package: Family',
+  'Curry option 1',
+  'Curry option 2',
+  'Curry option 3'
+]);
+
+function isOrderableItem(itemName) {
+  if (!itemName || typeof itemName !== 'string') return false;
+  const trimmed = itemName.trim();
+  if (ORDERABLE_ITEMS.has(trimmed)) return true;
+  const unPrefixed = trimmed.replace(/^Tiffin Plan\s*[-—–]\s*/i, '').trim();
+  if (ORDERABLE_ITEMS.has(unPrefixed)) return true;
+  const normalized = unPrefixed.replace(/:\s*([A-Za-z]+)/, ' ($1)');
+  if (ORDERABLE_ITEMS.has(normalized)) return true;
+  return false;
+}
+
+// Modal Elements
+const loginModal = document.getElementById('loginModal');
+const loginModalCancel = document.getElementById('loginModalCancel');
+const loginModalProceed = document.getElementById('loginModalProceed');
+const loginModalDesc = document.getElementById('loginModalDesc');
+
+const orderSuccessModal = document.getElementById('orderSuccessModal');
+const orderSuccessClose = document.getElementById('orderSuccessClose');
+const successOrderId = document.getElementById('successOrderId');
+const successCustomerName = document.getElementById('successCustomerName');
+const successTotalAmount = document.getElementById('successTotalAmount');
+const successOrderItems = document.getElementById('successOrderItems');
+const successWhatsAppBtn = document.getElementById('successWhatsAppBtn');
+
+function showLoginRequiredModal(message) {
+  if (loginModalDesc && message) loginModalDesc.textContent = message;
+  if (loginModal) {
+    loginModal.classList.remove('hidden');
+    loginModal.setAttribute('aria-hidden', 'false');
+  } else {
+    alert(message || 'Please login to place your order.');
+    const returnUrl = `${window.location.pathname}?checkout=1${window.location.hash || '#menu'}`;
+    window.location.href = `/customer/login.html?return=${encodeURIComponent(returnUrl)}`;
+  }
+}
+
+function hideLoginRequiredModal() {
+  if (loginModal) {
+    loginModal.classList.add('hidden');
+    loginModal.setAttribute('aria-hidden', 'true');
+  }
+}
+
+loginModalCancel?.addEventListener('click', hideLoginRequiredModal);
+loginModalProceed?.addEventListener('click', () => {
+  hideLoginRequiredModal();
+  persistCart();
+  const returnUrl = `${window.location.pathname}?checkout=1${window.location.hash || '#menu'}`;
+  window.location.href = `/customer/login.html?return=${encodeURIComponent(returnUrl)}`;
+});
+
+function showOrderSuccessModal(data) {
+  if (successOrderId) successOrderId.textContent = data.orderId || '—';
+  if (successCustomerName) successCustomerName.textContent = data.customerName || '—';
+  if (successTotalAmount) successTotalAmount.textContent = money(data.totalAmount || 0);
+  if (successOrderItems) {
+    successOrderItems.innerHTML = (data.items || []).map((it) => `<div>• ${it.productName} × ${it.quantity} (${money(it.subtotal || it.priceAtPurchase * it.quantity)})</div>`).join('');
+  }
+  if (successWhatsAppBtn && data.whatsappUrl) {
+    successWhatsAppBtn.href = data.whatsappUrl;
+  }
+  if (orderSuccessModal) {
+    orderSuccessModal.classList.remove('hidden');
+    orderSuccessModal.setAttribute('aria-hidden', 'false');
+  } else {
+    alert(`Order placed successfully!\nOrder ID: ${data.orderId}\nTotal: ${money(data.totalAmount)}\nYour order has been received.`);
+  }
+}
+
+function hideOrderSuccessModal() {
+  if (orderSuccessModal) {
+    orderSuccessModal.classList.add('hidden');
+    orderSuccessModal.setAttribute('aria-hidden', 'true');
+  }
+}
+
+orderSuccessClose?.addEventListener('click', hideOrderSuccessModal);
+
 function persistCart() {
   localStorage.setItem('sattwikCart', JSON.stringify({ items: Array.from(cart.values()), customRequest }));
 }
@@ -34,7 +132,10 @@ function persistCart() {
 function restoreCart() {
   try {
     const saved = JSON.parse(localStorage.getItem('sattwikCart') || '{}');
-    (saved.items || []).forEach((item) => cart.set(item.name, item));
+    (saved.items || []).forEach((item) => {
+      // Temporarily restore all items, will filter after products are loaded
+      cart.set(item.name, item);
+    });
     customRequest = saved.customRequest || '';
   } catch (error) {
     localStorage.removeItem('sattwikCart');
@@ -327,6 +428,9 @@ function createProductCard(product) {
   const stockDisplay = isOutOfStock ? 'Out of stock' : `${product.stock} available`;
   const stockClass = isOutOfStock ? 'out-of-stock' : 'in-stock';
 
+  // ONLY check if this specific item is in the allowed orderable list
+  const isOrderable = isOrderableItem(product.name) && !isOutOfStock;
+
   card.innerHTML = `
     <div class="product-image-shell">
       <img src="${product.image || 'assets/product-placeholder.svg'}" alt="${product.name}" />
@@ -337,19 +441,24 @@ function createProductCard(product) {
       <small class="stock-status ${stockClass}">${stockDisplay}</small>
     </div>
     <div class="product-actions">
+      ${isOrderable ? `
       <div class="qty-control">
-        <button type="button" class="qty-minus" aria-label="Decrease ${product.name} quantity" ${isOutOfStock ? 'disabled' : ''}>−</button>
+        <button type="button" class="qty-minus" aria-label="Decrease ${product.name} quantity">−</button>
         <span class="qty-value">${qty}</span>
-        <button type="button" class="qty-plus" aria-label="Increase ${product.name} quantity" ${isOutOfStock ? 'disabled' : ''}>+</button>
+        <button type="button" class="qty-plus" aria-label="Increase ${product.name} quantity">+</button>
       </div>
-      <span class="auto-cart-note">${isOutOfStock ? 'Currently unavailable' : 'Updates cart automatically'}</span>
+      <span class="auto-cart-note">Updates cart automatically</span>
+      ` : `
+      <span class="display-only-note">Display only</span>
+      `}
     </div>
   `;
 
-  const minus = card.querySelector('.qty-minus');
-  const plus = card.querySelector('.qty-plus');
-  
-  if (!isOutOfStock) {
+  // Only add event listeners for orderable products
+  if (isOrderable) {
+    const minus = card.querySelector('.qty-minus');
+    const plus = card.querySelector('.qty-plus');
+    
     minus.addEventListener('click', () => {
       updateQty(product.name, Number(product.price), (cart.get(product.name)?.qty || 0) - 1, product.stock);
     });
@@ -361,12 +470,18 @@ function createProductCard(product) {
   return card;
 }
 
-function updateQty(name, price, nextQty, maxStock = null) {
+function updateQty(name, price, nextQty, maxStock = null, category = 'product', packageType = null, size = null) {
   const currentQty = cart.get(name)?.qty || 0;
   const safeQty = Math.max(0, Number(nextQty) || 0);
   
-  // Enforce stock limits
-  if (maxStock !== null && safeQty > maxStock) {
+  // ONLY allow the 6 specific orderable items
+  if (!isOrderableItem(name) && safeQty > 0) {
+    showToast('Only Full Meal Packages and Curry options can be ordered. This product is display-only.');
+    return;
+  }
+  
+  // Enforce stock limits for regular products
+  if (maxStock !== null && safeQty > maxStock && category !== 'tiffin') {
     showToast(`Only ${maxStock} items available`);
     return;
   }
@@ -379,7 +494,7 @@ function updateQty(name, price, nextQty, maxStock = null) {
     // Don't add item with 0 quantity
     return;
   } else {
-    cart.set(name, { name, price, qty: safeQty, category: 'product' });
+    cart.set(name, { name, price, qty: safeQty, category, packageType, size });
   }
   
   persistCart();
@@ -411,14 +526,29 @@ function customerDetailsValid() {
 }
 
 function updateSendState() {
-  const ready = hasEnquiry() && customerDetailsValid();
-  if (sendCartWhatsApp) sendCartWhatsApp.disabled = !ready;
+  const hasItems = hasEnquiry();
+  customerToken = localStorage.getItem('sattwikCustomerToken') || '';
+  
+  if (sendCartWhatsApp) {
+    sendCartWhatsApp.disabled = !hasItems;
+    sendCartWhatsApp.textContent = 'Place Order';
+  }
+  
   if (!customerFormStatus) return;
 
-  if (!hasEnquiry()) customerFormStatus.textContent = 'Add at least one product or a custom request before sending your enquiry.';
-  else if (!customerDetailsValid()) customerFormStatus.textContent = 'Complete your first name, last name, phone number, email and area.';
-  else customerFormStatus.textContent = 'Ready — your contact details and order will be included in the WhatsApp message.';
-  customerFormStatus.classList.toggle('ready', ready);
+  if (!hasItems) {
+    customerFormStatus.textContent = 'Your cart is empty. Add a package to place an order.';
+    customerFormStatus.classList.remove('ready');
+  } else if (!customerToken) {
+    customerFormStatus.textContent = 'Please log in to place your order.';
+    customerFormStatus.classList.add('ready');
+  } else if (!customerDetailsValid()) {
+    customerFormStatus.textContent = 'Please complete your contact details below.';
+    customerFormStatus.classList.add('ready');
+  } else {
+    customerFormStatus.textContent = 'Ready — click Place Order to submit your order.';
+    customerFormStatus.classList.add('ready');
+  }
 }
 
 function buildWhatsAppText() {
@@ -443,6 +573,14 @@ function renderCart() {
   let count = 0;
 
   cart.forEach((item) => {
+    // ONLY allow the 6 specific orderable items in cart
+    if (!isOrderableItem(item.name)) {
+      // Remove non-orderable products from cart
+      cart.delete(item.name);
+      persistCart();
+      return;
+    }
+    
     subtotal += Number(item.price) * Number(item.qty);
     count += Number(item.qty);
 
@@ -519,6 +657,13 @@ const fetchProducts = async () => {
     const data = await response.json();
     const products = Array.isArray(data.products) ? data.products : [];
     products.forEach((product) => productMap.set(product.name, product));
+    
+    // Clean cart to remove non-orderable products after products are loaded
+    cleanCartForTiffinOnly();
+    
+    // Initialize Tiffin Plan quantities after products are loaded
+    initializeTiffinPlanQuantities();
+    
     renderProductTiles(products);
   } catch (error) {
     const fallback = [
@@ -532,24 +677,72 @@ const fetchProducts = async () => {
   }
 };
 
+function cleanCartForTiffinOnly() {
+  let cleaned = false;
+  cart.forEach((item, name) => {
+    // ONLY keep the 6 allowed orderable items
+    if (!isOrderableItem(name)) {
+      cart.delete(name);
+      cleaned = true;
+    }
+  });
+  if (cleaned) {
+    persistCart();
+    renderCart();
+  }
+}
+
+function initializeTiffinPlanQuantities() {
+  cart.forEach((item, name) => {
+    if (item.category === 'tiffin' && isOrderableItem(name)) {
+      const planId = `${item.packageType}-${item.size}`;
+      const qtyDisplay = document.querySelector(`[data-tiffin-qty="${planId}"]`);
+      if (qtyDisplay) {
+        qtyDisplay.textContent = String(item.qty);
+      }
+    }
+  });
+}
+
 fetchProducts();
 
 customerDetailsForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
+  
+  if (!hasEnquiry()) {
+    showToast('Your cart is empty. Please add a package to order.');
+    return;
+  }
+
   customerToken = localStorage.getItem('sattwikCustomerToken') || '';
   if (!customerToken) {
     persistCart();
-    const returnUrl = `${window.location.pathname}?checkout=1${window.location.hash || '#menu'}`;
-    window.location.href = `/customer/login.html?return=${encodeURIComponent(returnUrl)}`;
+    showLoginRequiredModal('Please login to place your order.');
     return;
   }
-  if (!customerDetailsValid() || !hasEnquiry()) {
-    customerFormStatus.textContent = 'Add an item and complete your details before sending the order.';
+
+  if (!customerDetailsValid()) {
+    customerDetailsForm.reportValidity?.();
+    if (customerFormStatus) {
+      customerFormStatus.textContent = 'Please complete all required fields before placing your order.';
+      customerFormStatus.classList.add('ready');
+    }
+    return;
+  }
+
+  // Validate that ONLY the 6 allowed items are in the cart
+  const cartItemsList = Array.from(cart.values());
+  const hasNonOrderableItems = cartItemsList.some((item) => !isOrderableItem(item.name));
+  
+  if (hasNonOrderableItems) {
+    customerFormStatus.textContent = 'Only Full Meal Packages and Curry options can be ordered. Please remove non-orderable items from your cart.';
+    customerFormStatus.classList.add('ready');
+    showToast('Only Full Meal Packages and Curry options can be ordered.');
     return;
   }
 
   const customAmountVal = Number(localStorage.getItem('sattwikCustomAmount') || 0);
-  const itemsSubtotal = Array.from(cart.values()).reduce((sum, it) => sum + (Number(it.price || 0) * Number(it.qty || 0)), 0);
+  const itemsSubtotal = cartItemsList.reduce((sum, it) => sum + (Number(it.price || 0) * Number(it.qty || 0)), 0);
   const calculatedTotal = Math.round((itemsSubtotal + (customRequest ? customAmountVal : 0)) * 100) / 100;
 
   const payload = {
@@ -563,19 +756,24 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
     customRequest,
     customAmount: customAmountVal,
     totalAmount: calculatedTotal,
-    items: Array.from(cart.values()).filter((item) => item.category !== 'tiffin').map((item) => ({
+    items: cartItemsList.filter((item) => item.category !== 'tiffin').map((item) => ({
       productId: productMap.get(item.name)?._id || null,
       productName: item.name,
       quantity: item.qty,
       price: item.price
     })),
-    tiffinPlans: Array.from(cart.values()).filter((item) => item.category === 'tiffin').map((item) => ({
+    tiffinPlans: cartItemsList.filter((item) => item.category === 'tiffin').map((item) => ({
       packageType: item.packageType,
       size: item.size,
       quantity: item.qty
     })),
-    type: customRequest ? 'custom' : (Array.from(cart.values()).some((item) => item.category === 'tiffin') ? 'tiffin' : 'product')
+    type: customRequest ? 'custom' : (cartItemsList.some((item) => item.category === 'tiffin') ? 'tiffin' : 'product')
   };
+
+  if (sendCartWhatsApp) {
+    sendCartWhatsApp.disabled = true;
+    sendCartWhatsApp.textContent = 'Placing Order...';
+  }
 
   try {
     const response = await fetch('/api/orders', {
@@ -584,25 +782,60 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
       body: JSON.stringify(payload)
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Could not save this order');
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('sattwikCustomerToken');
+        localStorage.removeItem('sattwikCustomer');
+        updateCustomerAuthUI();
+        showLoginRequiredModal('Your session has expired. Please login to place your order.');
+        if (sendCartWhatsApp) {
+          sendCartWhatsApp.disabled = false;
+          sendCartWhatsApp.textContent = 'Place Order';
+        }
+        return;
+      }
+      throw new Error(data.message || 'Unable to place your order. Please try again.');
+    }
 
     const order = data.order;
-    const whatsappText = `Hi Sattwik Kitchen, I have submitted order ${order.orderId || 'SK-ORDER'}.\n\nCustomer: ${customerFirstName.value.trim()} ${customerLastName.value.trim()}\nPhone: ${customerPhone.value.trim()}\nEmail: ${customerEmail.value.trim()}\nArea: ${customerArea.value.trim() || 'Not provided'}\n\nItems:\n${Array.from(cart.values()).map((item) => `• ${item.name} x ${item.qty} - ${money(item.price * item.qty)}`).join('\n')}${customRequest ? `\n• Custom request: ${customRequest}` : ''}\n\nSubtotal: ${money(order.totalAmount || 0)}\nPlease confirm availability and next steps.`;
+    const itemsText = cartItemsList.map((item) => `• ${item.name} × ${item.qty} — ${money(item.price * item.qty)}`).join('\n');
+    const whatsappText = `Hi Sattwik Kitchen, I have placed order ${order.orderId || 'SK-ORDER'}.\n\nCustomer: ${customerFirstName.value.trim()} ${customerLastName.value.trim()}\nPhone: ${customerPhone.value.trim()}\nEmail: ${customerEmail.value.trim()}\nArea: ${customerArea.value.trim() || 'Not provided'}\n\nItems:\n${itemsText}${customRequest ? `\n• Custom request: ${customRequest}` : ''}\n\nTotal: ${money(order.totalAmount || 0)}\nPlease confirm my order.`;
+    const whatsappUrl = `https://wa.me/16725881282?text=${encodeURIComponent(whatsappText)}`;
 
-    showToast(`Order ${order.orderId || 'saved'} received`);
+    // Clear cart after successful database order creation
     cart.clear();
     customRequest = '';
     localStorage.removeItem('sattwikCustomAmount');
     localStorage.removeItem('sattwikCart');
     renderCart();
-    customerDetailsForm.reset();
-    document.getElementById('customOrderText').value = '';
-    document.getElementById('customOrderStatus').textContent = '';
-    openCart();
-    window.open(`https://wa.me/16725881282?text=${encodeURIComponent(whatsappText)}`, '_blank', 'noopener');
+
+    // Show clear success popup with order details
+    showOrderSuccessModal({
+      orderId: order.orderId,
+      totalAmount: order.totalAmount,
+      customerName: `${customerFirstName.value.trim()} ${customerLastName.value.trim()}`,
+      items: order.items || [],
+      whatsappUrl
+    });
+
+    closeCart();
+
+    // Only AFTER successful database creation, open WhatsApp
+    try {
+      window.open(whatsappUrl, '_blank', 'noopener');
+    } catch (e) {
+      console.warn('WhatsApp window open notice:', e);
+    }
   } catch (error) {
-    customerFormStatus.textContent = error.message || 'Your order could not be submitted.';
+    customerFormStatus.textContent = error.message || 'Unable to place your order. Please try again.';
     customerFormStatus.classList.add('ready');
+    showToast(error.message || 'Unable to place your order. Please try again.');
+  } finally {
+    if (sendCartWhatsApp) {
+      sendCartWhatsApp.disabled = !hasEnquiry();
+      sendCartWhatsApp.textContent = 'Place Order';
+    }
   }
 });
 
@@ -633,17 +866,69 @@ document.getElementById('addCustomOrder')?.addEventListener('click', () => {
   openCart();
 });
 
-document.querySelectorAll('[data-tiffin]').forEach((button) => button.addEventListener('click', (event) => {
-  event.preventDefault();
-  const { package: pkg, size, price } = button.dataset;
-  const planName = `${pkg === 'full' ? 'Full Meal Package' : 'Curry-Only Package'} (${size})`;
-  const existing = cart.get(planName);
-  cart.set(planName, { name: planName, price: Number(price), qty: existing ? existing.qty + 1 : 1, category: 'tiffin', packageType: pkg, size });
-  persistCart();
-  renderCart();
-  openCart();
-  showToast(`${planName} added to cart`);
-}));
+// Tiffin Plan quantity controls
+document.querySelectorAll('[data-tiffin-action]').forEach((button) => {
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    const action = button.dataset.tiffinAction;
+    const planId = button.dataset.tiffinPlan;
+    const planCard = document.querySelector(`[data-tiffin-plan="${planId}"]`);
+    const price = Number(planCard?.dataset.tiffinPrice || 0);
+    
+    // Parse plan ID to get package type and size
+    const [packageType, size] = planId.split('-');
+    const planName = `${packageType === 'full' ? 'Full Meal Package' : 'Curry-Only Package'} (${size.charAt(0).toUpperCase() + size.slice(1)})`;
+    
+    const currentQty = cart.get(planName)?.qty || 0;
+    const nextQty = action === 'increase' ? currentQty + 1 : currentQty - 1;
+    
+    // Update the cart with the new quantity
+    if (nextQty === 0) {
+      cart.delete(planName);
+    } else {
+      cart.set(planName, { name: planName, price, qty: nextQty, category: 'tiffin', packageType, size });
+    }
+    
+    persistCart();
+    renderCart();
+    
+    // Update the display quantity on the plan card
+    const qtyDisplay = document.querySelector(`[data-tiffin-qty="${planId}"]`);
+    if (qtyDisplay) {
+      qtyDisplay.textContent = String(cart.get(planName)?.qty || 0);
+    }
+  });
+});
+
+// Tiffin Plan "Choose Plan" buttons
+document.querySelectorAll('[data-tiffin-choose]').forEach((button) => {
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    const planId = button.dataset.tiffinChoose;
+    const planCard = document.querySelector(`[data-tiffin-plan="${planId}"]`);
+    const price = Number(planCard?.dataset.tiffinPrice || 0);
+    
+    // Parse plan ID to get package type and size
+    const [packageType, size] = planId.split('-');
+    const planName = `${packageType === 'full' ? 'Full Meal Package' : 'Curry-Only Package'} (${size.charAt(0).toUpperCase() + size.slice(1)})`;
+    
+    // If quantity is 0, set it to 1. If already > 0, just open cart
+    const currentQty = cart.get(planName)?.qty || 0;
+    if (currentQty === 0) {
+      cart.set(planName, { name: planName, price, qty: 1, category: 'tiffin', packageType, size });
+      persistCart();
+      
+      // Update the display quantity on the plan card
+      const qtyDisplay = document.querySelector(`[data-tiffin-qty="${planId}"]`);
+      if (qtyDisplay) {
+        qtyDisplay.textContent = '1';
+      }
+    }
+    
+    renderCart();
+    openCart();
+  });
+});
 
 document.querySelectorAll('.plan-toggle button').forEach((button) => {
   button.addEventListener('click', () => {

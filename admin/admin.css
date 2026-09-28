@@ -298,6 +298,8 @@ th {
   font-size: 11px;
 }
 .badge.pending { background: #fdf2d9; color: #996714; }
+.badge.accepted { background: #edf2ff; color: #3457c2; }
+.badge.out_for_delivery { background: #fff2d8; color: #7a5604; }
 .badge.confirmed { background: #edf2ff; color: #3457c2; }
 .badge.preparing { background: #fff2d8; color: #7a5604; }
 .badge.ready { background: #dff5ea; color: #11613d; }

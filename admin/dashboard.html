@@ -22,6 +22,7 @@
       <button class="nav-item" data-view="custom">Custom & Catering</button>
       <button class="nav-item" data-view="exports">Exports</button>
       <button class="nav-item" data-view="admins">Add Admin</button>
+      <button class="nav-item" data-view="deliveryMembers">Delivery Members</button>
       <button class="nav-item" data-view="security">Change Password</button>
     </nav>
 
@@ -163,6 +164,40 @@
       <div class="panel card">
         <div class="panel-head"><h3>Existing admins</h3></div>
         <div id="adminsTable" class="table-shell"></div>
+      </div>
+    </section>
+
+    <section id="deliveryMembersView" class="view-panel">
+      <div class="panel card">
+        <div class="panel-head"><h3>Add Delivery Member</h3></div>
+        <form id="addDeliveryMemberForm" class="stacked-form" novalidate>
+          <label>
+            Name
+            <input id="newDeliveryName" type="text" required autocomplete="off" placeholder="Full name" />
+          </label>
+          <label>
+            Email
+            <input id="newDeliveryEmail" type="email" required autocomplete="off" placeholder="delivery@example.com" />
+          </label>
+          <label>
+            Phone
+            <input id="newDeliveryPhone" type="tel" required autocomplete="off" placeholder="Phone number" />
+          </label>
+          <label>
+            Password
+            <input id="newDeliveryPassword" type="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters" />
+          </label>
+          <label>
+            Confirm Password
+            <input id="newDeliveryConfirmPassword" type="password" required minlength="8" autocomplete="new-password" placeholder="Re-enter password" />
+          </label>
+          <button type="submit" class="btn btn-primary">Create delivery member</button>
+          <p id="addDeliveryMessage" class="form-message" aria-live="polite"></p>
+        </form>
+      </div>
+      <div class="panel card">
+        <div class="panel-head"><h3>Existing delivery members</h3></div>
+        <div id="deliveryMembersTable" class="table-shell"></div>
       </div>
     </section>
  

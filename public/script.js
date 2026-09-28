@@ -407,7 +407,7 @@ function hasEnquiry() {
 }
 
 function customerDetailsValid() {
-  return [customerFirstName, customerLastName, customerPhone, customerEmail].every((field) => field && field.value.trim() && field.checkValidity());
+  return [customerFirstName, customerLastName, customerPhone, customerEmail, customerArea].every((field) => field && field.value.trim() && field.checkValidity());
 }
 
 function updateSendState() {
@@ -416,7 +416,7 @@ function updateSendState() {
   if (!customerFormStatus) return;
 
   if (!hasEnquiry()) customerFormStatus.textContent = 'Add at least one product or a custom request before sending your enquiry.';
-  else if (!customerDetailsValid()) customerFormStatus.textContent = 'Complete your first name, last name, phone number and a valid email address.';
+  else if (!customerDetailsValid()) customerFormStatus.textContent = 'Complete your first name, last name, phone number, email and area.';
   else customerFormStatus.textContent = 'Ready — your contact details and order will be included in the WhatsApp message.';
   customerFormStatus.classList.toggle('ready', ready);
 }

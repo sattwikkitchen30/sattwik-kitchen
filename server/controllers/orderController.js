@@ -245,9 +245,38 @@ async function updateStatus(req, res) {
   }
   order.status = status;
   await order.save();
-  const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
+  const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
   emitOrderUpdate(req.app, populated);
   res.json({ message: `Order marked as ${status}`, order: populated });
+}
+
+async function assignDeliveryMember(req, res) {
+  const { deliveryMemberId } = req.body || {};
+  
+  if (!deliveryMemberId) return res.status(400).json({ message: 'Delivery member ID is required' });
+  
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ message: 'Order not found' });
+  
+  const DeliveryMember = require('../models/DeliveryMember');
+  const deliveryMember = await DeliveryMember.findById(deliveryMemberId);
+  if (!deliveryMember) return res.status(404).json({ message: 'Delivery member not found' });
+  if (!deliveryMember.active) return res.status(400).json({ message: 'Delivery member is inactive' });
+  
+  if (['CANCELLED', 'cancelled', 'DELIVERED', 'delivered'].includes(order.status)) {
+    return res.status(400).json({ message: 'Cannot assign a cancelled or delivered order' });
+  }
+
+  order.deliveryMemberId = deliveryMemberId;
+  if (['PENDING', 'pending'].includes(order.status) || !order.status) {
+    order.status = 'ACCEPTED';
+    order.acceptedAt = new Date();
+  }
+  await order.save();
+  
+  const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
+  emitOrderUpdate(req.app, populated);
+  res.json({ message: 'Order assigned to delivery member', order: populated });
 }
 
 async function deleteOrder(req, res) {
@@ -256,4 +285,4 @@ async function deleteOrder(req, res) {
   res.json({ message: 'Order deleted' });
 }
 
-module.exports = { createOrder, listOrders, getOrder, updateStatus, deleteOrder };
+module.exports = { createOrder, listOrders, getOrder, updateStatus, deleteOrder, assignDeliveryMember };

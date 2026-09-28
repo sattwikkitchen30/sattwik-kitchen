@@ -29,9 +29,10 @@ app.get('/admin/signup', (req, res) => res.redirect('/admin/login.html'));
 app.use('/customer', express.static(path.join(__dirname, '..', 'customer')));
 app.get('/customer/login', (req, res) => res.sendFile(path.join(__dirname, '..', 'customer', 'login.html')));
 app.get('/customer/orders', (req, res) => res.sendFile(path.join(__dirname, '..', 'customer', 'orders.html')));
+app.get('/delivery/signup', (req, res) => res.redirect('/delivery/login.html'));
+app.get('/delivery/signup.html', (req, res) => res.redirect('/delivery/login.html'));
 app.use('/delivery', express.static(path.join(__dirname, '..', 'delivery')));
 app.get('/delivery/login', (req, res) => res.sendFile(path.join(__dirname, '..', 'delivery', 'login.html')));
-app.get('/delivery/signup', (req, res) => res.sendFile(path.join(__dirname, '..', 'delivery', 'signup.html')));
 app.get('/delivery/dashboard', (req, res) => res.sendFile(path.join(__dirname, '..', 'delivery', 'dashboard.html')));
 
 app.use('/api/auth', wrapRouter(require('./routes/auth')));
@@ -39,6 +40,7 @@ app.use('/api/customer-auth', wrapRouter(require('./routes/customerAuth')));
 app.use('/api/customer-orders', wrapRouter(require('./routes/customerOrders')));
 app.use('/api/delivery-auth', wrapRouter(require('./routes/deliveryAuth')));
 app.use('/api/delivery-orders', wrapRouter(require('./routes/deliveryOrders')));
+app.use('/api/delivery-members', wrapRouter(require('./routes/deliveryMembers')));
 app.use('/api/products', wrapRouter(require('./routes/products')));
 app.use('/api/orders', wrapRouter(require('./routes/orders')));
 app.use('/api/customers', wrapRouter(require('./routes/customers')));
@@ -73,7 +75,7 @@ io.on('connection', (socket) => {
     const token = socket.handshake.auth?.token;
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev_secret_change_me');
     if (payload.type === 'customer') socket.join(`customer:${payload.id}`);
-    if (payload.type === 'delivery') socket.join('delivery');
+    if (payload.type === 'delivery') socket.join(`delivery:${payload.id}`);
     if (payload.type === 'admin') socket.join('admin');
   } catch (error) {
     socket.disconnect(true);

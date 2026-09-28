@@ -167,6 +167,7 @@ async function loadDashboardData() {
     renderOrdersTable();
     renderProductsTable();
     await renderCustomersTable();
+    await renderDeliveryMembersTable();
     renderExports();
   } catch (error) {
     console.error(error);
@@ -271,6 +272,13 @@ function renderCustomerInsights(customers) {
 async function renderOrdersTable() {
   const params = parseFilters();
   const data = await api(`/orders?${params.toString()}`);
+  let deliveryMembers = [];
+  try {
+    const deliveryMembersData = await api('/delivery-members');
+    deliveryMembers = deliveryMembersData.members || [];
+  } catch (error) {
+    console.error('Failed to load delivery members:', error);
+  }
   const orders = data.orders || [];
   const table = document.getElementById('ordersTable');
   table.innerHTML = `
@@ -293,7 +301,13 @@ async function renderOrdersTable() {
               </select>
               <span class="badge ${String(order.status).toLowerCase()}">${order.status}</span>
             </td>
-            <td>${order.deliveryMemberDoc?.name || 'Unassigned'}</td>
+            <td>
+              <select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
+                <option value="">Unassigned</option>
+                ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${member.name}</option>`).join('')}
+              </select>
+              <button class="assign-btn" data-order-id="${order._id}">Assign</button>
+            </td>
             <td>${currency(order.totalAmount)}</td>
           </tr>
         `).join('') || '<tr><td colspan="7">No orders found</td></tr>'}
@@ -308,6 +322,20 @@ async function renderOrdersTable() {
     } catch (error) {
       select.value = previous;
       alert(error.message || 'Status update failed');
+    }
+  }));
+  table.querySelectorAll('.assign-btn').forEach((btn) => btn.addEventListener('click', async () => {
+    const select = table.querySelector(`.delivery-member-select[data-order-id="${btn.dataset.orderId}"]`);
+    const deliveryMemberId = select.value;
+    if (!deliveryMemberId) {
+      alert('Please select a delivery member');
+      return;
+    }
+    try {
+      await api(`/orders/${btn.dataset.orderId}/assign`, { method: 'PUT', body: JSON.stringify({ deliveryMemberId }) });
+      await loadDashboardData();
+    } catch (error) {
+      alert(error.message || 'Assignment failed');
     }
   }));
 }
@@ -396,6 +424,71 @@ function escHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// ===============================
+// DELIVERY MEMBER MANAGEMENT
+// ===============================
+async function renderDeliveryMembersTable() {
+  const data = await api('/delivery-members');
+  const members = data.members || [];
+  const table = document.getElementById('deliveryMembersTable');
+  table.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Name</th><th>Email</th><th>Phone</th><th>Active</th><th>Created</th>
+      </tr></thead>
+      <tbody>
+        ${members.map((member) => `
+          <tr>
+            <td>${escHtml(member.name)}</td>
+            <td>${escHtml(member.email)}</td>
+            <td>${escHtml(member.phone)}</td>
+            <td>${member.active ? 'Yes' : 'No'}</td>
+            <td>${dateLabel(member.createdAt)}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="5">No delivery members found</td></tr>'}
+      </tbody>
+    </table>
+  `;
+}
+
+document.getElementById('addDeliveryMemberForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msgEl = document.getElementById('addDeliveryMessage');
+  msgEl.textContent = '';
+
+  const name = document.getElementById('newDeliveryName').value.trim();
+  const email = document.getElementById('newDeliveryEmail').value.trim();
+  const phone = document.getElementById('newDeliveryPhone').value.trim();
+  const password = document.getElementById('newDeliveryPassword').value;
+  const confirmPassword = document.getElementById('newDeliveryConfirmPassword').value;
+
+  if (!name) { msgEl.textContent = 'Name is required.'; return; }
+  if (!email) { msgEl.textContent = 'Email is required.'; return; }
+  if (!phone) { msgEl.textContent = 'Phone is required.'; return; }
+  if (!password || !confirmPassword) { msgEl.textContent = 'Password and confirm password are required.'; return; }
+  if (password.length < 8) { msgEl.textContent = 'Password must be at least 8 characters.'; return; }
+  if (password !== confirmPassword) { msgEl.textContent = 'Passwords do not match.'; return; }
+
+  const submitBtn = document.getElementById('addDeliveryMemberForm').querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Creating…';
+
+  try {
+    await api('/delivery-members', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, phone, password, confirmPassword })
+    });
+    setMessage(msgEl, 'Delivery member created successfully!', true);
+    document.getElementById('addDeliveryMemberForm').reset();
+    await renderDeliveryMembersTable();
+  } catch (error) {
+    msgEl.textContent = error.message || 'Could not create delivery member';
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Create delivery member';
+  }
+});
 
 // -----------------------------------------------------------------------
 // Product edit modal logic

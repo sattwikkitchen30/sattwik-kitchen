@@ -312,6 +312,31 @@ th {
   font-size: 11px;
   margin-right: 5px;
 }
+.delivery-member-select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 7px;
+  background: white;
+  color: var(--ink);
+  font-size: 11px;
+  margin-right: 5px;
+}
+.assign-btn {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: none;
+  background: var(--green);
+  color: white;
+  cursor: pointer;
+  font-size: 11px;
+}
+.assign-btn:hover {
+  background: var(--green-dark);
+}
+.assign-btn:disabled {
+  background: var(--muted);
+  cursor: not-allowed;
+}
 .stock-control {
   display: inline-flex;
   align-items: center;
@@ -485,4 +510,4 @@ th {
   padding: 4px 8px;
   border-radius: 6px;
 }
-.modal-close:hover { background: var(--panel-soft); }
+.modal-close:hover { background: var(--panel-soft); }

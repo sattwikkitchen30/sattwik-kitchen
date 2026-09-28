@@ -1,5 +1,24 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Delivery Dashboard | Sattwik Kitchen</title><link rel="stylesheet" href="delivery.css"></head>
-<body class="delivery-page"><main class="delivery-main"><header class="delivery-header"><div><p class="eyebrow">DELIVERY MEMBER</p><h1>Available orders</h1><p id="memberName"></p></div><button class="delivery-button secondary" id="deliveryLogout">Log out</button></header><p id="deliveryMessage" class="message"></p><section id="deliveryOrders" class="delivery-orders"></section></main><script src="/socket.io/socket.io.js"></script><script src="delivery.js"></script></body>
+<body class="delivery-page"><main class="delivery-main"><header class="delivery-header"><div><p class="eyebrow">DELIVERY MEMBER</p><h1>My Assigned Orders</h1><p id="memberName"></p></div><div><button class="delivery-button secondary" id="changePasswordBtn">Change Password</button><button class="delivery-button secondary" id="deliveryLogout">Log out</button></div></header><p id="deliveryMessage" class="message"></p><section id="deliveryOrders" class="delivery-orders"></section></main>
+
+<!-- Change Password Modal -->
+<div id="changePasswordModal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Change Password</h2>
+      <button class="close-modal" id="closePasswordModal">&times;</button>
+    </div>
+    <form id="changePasswordForm">
+      <label>Current Password<input type="password" id="currentPassword" required></label>
+      <label>New Password<input type="password" id="newPassword" required minlength="8"></label>
+      <label>Confirm New Password<input type="password" id="confirmPassword" required minlength="8"></label>
+      <button type="submit" class="delivery-button">Change Password</button>
+      <p id="passwordMessage" class="message"></p>
+    </form>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script><script src="delivery.js"></script></body>
 </html>

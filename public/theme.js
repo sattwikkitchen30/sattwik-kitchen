@@ -1,14 +1,4 @@
 (() => {
-  const themeKey = 'sattwikTheme';
-  const root = document.documentElement;
-
-  try {
-    root.dataset.theme = localStorage.getItem(themeKey) === 'dark' ? 'dark' : 'light';
-  } catch (error) {
-    root.dataset.theme = 'light';
-  }
-  root.classList.toggle('theme-dark', root.dataset.theme === 'dark');
-
   function addPasswordToggles() {
     document.querySelectorAll('input[type="password"]').forEach((input) => {
       if (input.dataset.visibilityToggle === 'true') return;
@@ -36,45 +26,5 @@
     });
   }
 
-  function mountThemeToggle() {
-    if (document.getElementById('themeToggle')) return;
-    const button = document.createElement('button');
-    button.id = 'themeToggle';
-    button.className = 'theme-toggle';
-    button.type = 'button';
-    button.addEventListener('click', () => {
-      const theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
-      root.dataset.theme = theme;
-      root.classList.toggle('theme-dark', theme === 'dark');
-      button.setAttribute('aria-pressed', String(theme === 'dark'));
-      button.setAttribute('aria-label', `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`);
-      button.textContent = `${theme === 'dark' ? 'Light' : 'Dark'} mode`;
-      try {
-        localStorage.setItem(themeKey, theme);
-      } catch (error) {
-        // The selected theme remains active for this page if storage is unavailable.
-      }
-    });
-
-    const host = document.querySelector('.header-actions, .toolbar, .orders-actions, .delivery-header > div:last-child');
-    if (host) host.prepend(button);
-    else {
-      button.style.position = 'fixed';
-      button.style.top = '16px';
-      button.style.right = '16px';
-      button.style.zIndex = '1200';
-      button.style.boxShadow = '0 5px 18px rgba(0, 0, 0, .12)';
-      document.body.append(button);
-    }
-
-    const theme = root.dataset.theme;
-    button.setAttribute('aria-pressed', String(theme === 'dark'));
-    button.setAttribute('aria-label', `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`);
-    button.textContent = `${theme === 'dark' ? 'Light' : 'Dark'} mode`;
-  }
-
-  document.addEventListener('DOMContentLoaded', () => {
-    addPasswordToggles();
-    mountThemeToggle();
-  });
+  document.addEventListener('DOMContentLoaded', addPasswordToggles);
 })();

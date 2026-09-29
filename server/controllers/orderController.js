@@ -2,39 +2,60 @@ const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const Product = require('../models/Product');
+const TiffinSubscription = require('../models/TiffinSubscription');
 const { TIFFIN_PRICES, tiffinDisplayName, ORDER_STATUSES, DELIVERY_STATUSES, STATUS_TRANSITIONS } = require('../utils/constants');
 const { emitOrderUpdate } = require('../utils/orderEvents');
+const { parseDateInput, addDays } = require('../utils/tiffinPreparation');
 
-// ONLY these 6 items are orderable - everything else is display-only
-const ORDERABLE_ITEMS = new Set([
-  'Full Meal Package (Single)',
-  'Full Meal Package (Couple)', 
-  'Full Meal Package (Family)',
-  'Curry-Only Package (Single)',
-  'Curry-Only Package (Couple)',
-  'Curry-Only Package (Family)',
-  'Full Meal Package: Single',
-  'Full Meal Package: Couple',
-  'Full Meal Package: Family',
-  'Curry-Only Package: Single',
-  'Curry-Only Package: Couple',
-  'Curry-Only Package: Family',
-  'Curry option 1',
-  'Curry option 2',
-  'Curry option 3'
-]);
+function extractOrderFulfillment(orderItems = []) {
+  if (!orderItems.length) return 'pickup';
+  const deliveryCount = orderItems.filter((item) => item.fulfillment === 'delivery').length;
+  if (deliveryCount === 0) return 'pickup';
+  if (deliveryCount === orderItems.length) return 'delivery';
+  return 'mixed';
+}
 
-function isOrderableItem(itemName) {
-  if (!itemName || typeof itemName !== 'string') return false;
-  const trimmed = itemName.trim();
-  if (ORDERABLE_ITEMS.has(trimmed)) return true;
-  // Handle prefixes like "Tiffin Plan — " or "Tiffin Plan - "
-  const unPrefixed = trimmed.replace(/^Tiffin Plan\s*[-—–]\s*/i, '').trim();
-  if (ORDERABLE_ITEMS.has(unPrefixed)) return true;
-  // Handle colon format: "Full Meal Package: Single" -> "Full Meal Package (Single)"
-  const normalized = unPrefixed.replace(/:\s*([A-Za-z]+)/, ' ($1)');
-  if (ORDERABLE_ITEMS.has(normalized)) return true;
-  return false;
+function deriveSubscriptionDates(startDateValue, endDateValue) {
+  const fallbackStart = parseDateInput(startDateValue || new Date());
+  const fallbackEnd = endDateValue ? parseDateInput(endDateValue) : addDays(fallbackStart, 27);
+  const startDate = fallbackStart;
+  const endDate = fallbackEnd > startDate ? fallbackEnd : addDays(startDate, 27);
+  return { startDate, endDate };
+}
+
+async function createTiffinSubscriptionsForOrder(order, payload = {}) {
+  if (!order || order.type !== 'tiffin') return [];
+  const entries = Array.isArray(payload.tiffinPlans) ? payload.tiffinPlans : [];
+  if (!entries.length) return [];
+
+  const created = [];
+  for (const entry of entries) {
+    if (!entry || !entry.packageType || !entry.size) continue;
+    const quantity = Math.max(1, parseInt(entry.quantity, 10) || 1);
+    const { startDate, endDate } = deriveSubscriptionDates(entry.startDate || payload.startDate, entry.endDate || payload.endDate);
+
+    for (let index = 0; index < quantity; index += 1) {
+      const subscription = await TiffinSubscription.create({
+        customerId: order.customer,
+        orderId: order._id,
+        packageType: entry.packageType,
+        size: entry.size,
+        startDate,
+        endDate,
+        status: 'ACTIVE',
+        isDemo: Boolean(order.isDemo)
+      });
+      created.push(subscription);
+    }
+  }
+
+  return created;
+}
+
+async function syncTiffinSubscriptionStatus(order) {
+  if (!order || order.type !== 'tiffin') return;
+  const status = order.status === 'CANCELLED' ? 'CANCELLED' : 'ACTIVE';
+  await TiffinSubscription.updateMany({ orderId: order._id }, { $set: { status } });
 }
 
 async function createOrder(req, res) {
@@ -79,53 +100,34 @@ async function createOrder(req, res) {
     const byId = new Map(products.map((p) => [String(p._id), p]));
 
     for (const raw of items) {
-      if (raw.productId && mongoose.isValidObjectId(raw.productId)) {
-        const product = byId.get(String(raw.productId));
-        if (!product) {
-          return res.status(400).json({ message: `Invalid or inactive product: ${raw.productId}` });
-        }
-        
-        // ONLY allow the 6 specific orderable items
-        if (!isOrderableItem(product.name)) {
-          return res.status(400).json({ message: `Only Full Meal Packages and Curry options can be ordered. ${product.name} is display-only.` });
-        }
-        
-        const quantity = Math.max(1, Math.min(99, parseInt(raw.quantity, 10) || 1));
-        if (product.stock === 0) {
-          return res.status(400).json({ message: `${product.name} is currently out of stock.` });
-        }
-        if (product.stock < quantity) {
-          return res.status(400).json({ message: `Insufficient stock for ${product.name}. Available: ${product.stock}, requested: ${quantity}.` });
-        }
-        const subtotal = Math.round(product.price * quantity * 100) / 100;
-        totalAmount += subtotal;
-        orderItems.push({
-          productId: product._id,
-          productName: product.name,
-          category: product.category,
-          priceAtPurchase: product.price,
-          quantity,
-          subtotal
-        });
-      } else if (raw.productName && (Number(raw.price || raw.priceAtPurchase) >= 0)) {
-        // For custom items (without productId), also validate they are orderable
-        if (!isOrderableItem(raw.productName)) {
-          return res.status(400).json({ message: `Only Full Meal Packages and Curry options can be ordered. ${raw.productName} is display-only.` });
-        }
-        
-        const price = Math.round(Number(raw.price || raw.priceAtPurchase) * 100) / 100;
-        const quantity = Math.max(1, Math.min(99, parseInt(raw.quantity, 10) || 1));
-        const subtotal = Math.round(price * quantity * 100) / 100;
-        totalAmount += subtotal;
-        orderItems.push({
-          productId: null,
-          productName: String(raw.productName).trim(),
-          category: raw.category || 'Custom',
-          priceAtPurchase: price,
-          quantity,
-          subtotal
-        });
+      if (!raw || !mongoose.isValidObjectId(raw.productId)) {
+        return res.status(400).json({ message: 'Each product order item must reference a catalog product.' });
       }
+
+      const product = byId.get(String(raw.productId));
+      if (!product) {
+        return res.status(400).json({ message: `Invalid or inactive product: ${raw.productId}` });
+      }
+
+      const quantity = Math.max(1, Math.min(99, parseInt(raw.quantity, 10) || 1));
+      if (product.stock === 0) {
+        return res.status(400).json({ message: `${product.name} is currently out of stock.` });
+      }
+      if (product.stock < quantity) {
+        return res.status(400).json({ message: `Insufficient stock for ${product.name}. Available: ${product.stock}, requested: ${quantity}.` });
+      }
+      const subtotal = Math.round(product.price * quantity * 100) / 100;
+      totalAmount += subtotal;
+      orderItems.push({
+        productId: product._id,
+        productName: product.name,
+        category: product.category,
+        priceAtPurchase: product.price,
+        quantity,
+        subtotal,
+        fulfillment: 'pickup',
+        deliveryStatus: null
+      });
     }
   }
 
@@ -134,17 +136,17 @@ async function createOrder(req, res) {
     orderType = 'tiffin';
 
     for (const tp of tiffinPlans) {
-      const price = TIFFIN_PRICES[tp.packageType] && TIFFIN_PRICES[tp.packageType][tp.size];
+      const packagePrices = Object.prototype.hasOwnProperty.call(TIFFIN_PRICES, tp.packageType)
+        ? TIFFIN_PRICES[tp.packageType]
+        : null;
+      const price = packagePrices && Object.prototype.hasOwnProperty.call(packagePrices, tp.size)
+        ? packagePrices[tp.size]
+        : null;
       if (!price) {
         return res.status(400).json({ message: 'Invalid tiffin plan selection.' });
       }
       const quantity = Math.max(1, parseInt(tp.quantity, 10) || 1);
       const name = tiffinDisplayName(tp.packageType, tp.size);
-      
-      // ONLY allow the 6 specific orderable items
-      if (!isOrderableItem(name)) {
-        return res.status(400).json({ message: `Only Full Meal Packages and Curry options can be ordered. ${name} is display-only.` });
-      }
       
       const subtotal = price * quantity;
       totalAmount += subtotal;
@@ -154,7 +156,9 @@ async function createOrder(req, res) {
         category: 'Tiffin Plans',
         priceAtPurchase: price,
         quantity,
-        subtotal
+        subtotal,
+        fulfillment: 'delivery',
+        deliveryStatus: 'PENDING'
       });
       tiffinPlanMeta = { packageType: tp.packageType, size: tp.size, price };
     }
@@ -187,10 +191,13 @@ async function createOrder(req, res) {
 
   totalAmount = Math.round(totalAmount * 100) / 100;
 
+  const fulfillment = extractOrderFulfillment(orderItems);
+
   const order = await Order.create({
     customer: customerDoc._id,
     customerId: customerDoc._id,
     items: orderItems,
+    fulfillment,
     type: orderType,
     tiffinPlan: tiffinPlanMeta,
     customRequest: cleanCustom,
@@ -199,6 +206,10 @@ async function createOrder(req, res) {
     status: 'PENDING',
     placedAt: new Date()
   });
+
+  if (orderType === 'tiffin') {
+    await createTiffinSubscriptionsForOrder(order, req.body || {});
+  }
 
   const stockChanges = new Map();
   try {
@@ -310,6 +321,11 @@ async function updateStatus(req, res) {
   if (!ORDER_STATUSES.includes(status)) return res.status(400).json({ message: 'Invalid status' });
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ message: 'Order not found' });
+  const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
+  const isDeliveryOrder = deliveryItems.length > 0;
+  if (!isDeliveryOrder && ['OUT_FOR_DELIVERY', 'DELIVERED'].includes(status)) {
+    return res.status(400).json({ message: 'Pickup-only orders cannot move into delivery workflow.' });
+  }
   if (DELIVERY_STATUSES.includes(order.status) || DELIVERY_STATUSES.includes(status)) {
     if (STATUS_TRANSITIONS[order.status] !== status) return res.status(400).json({ message: `Invalid transition from ${order.status} to ${status}.` });
     if (status === 'ACCEPTED') order.acceptedAt = new Date();
@@ -317,7 +333,11 @@ async function updateStatus(req, res) {
     if (status === 'DELIVERED') order.deliveredAt = new Date();
   }
   order.status = status;
+  if (DELIVERY_STATUSES.includes(status)) {
+    deliveryItems.forEach((item) => { item.deliveryStatus = status; });
+  }
   await order.save();
+  await syncTiffinSubscriptionStatus(order);
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
   emitOrderUpdate(req.app, populated);
   res.json({ message: `Order marked as ${status}`, order: populated });
@@ -335,6 +355,11 @@ async function assignDeliveryMember(req, res) {
   const deliveryMember = await DeliveryMember.findById(deliveryMemberId);
   if (!deliveryMember) return res.status(404).json({ message: 'Delivery member not found' });
   if (!deliveryMember.active) return res.status(400).json({ message: 'Delivery member is inactive' });
+
+  const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
+  if (!deliveryItems.length) {
+    return res.status(400).json({ message: 'Pickup-only orders cannot be assigned to a delivery member.' });
+  }
   
   if (['CANCELLED', 'cancelled', 'DELIVERED', 'delivered'].includes(order.status)) {
     return res.status(400).json({ message: 'Cannot assign a cancelled or delivered order' });
@@ -345,6 +370,7 @@ async function assignDeliveryMember(req, res) {
     order.status = 'ACCEPTED';
     order.acceptedAt = new Date();
   }
+  deliveryItems.forEach((item) => { item.deliveryStatus = order.status; });
   await order.save();
   
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
@@ -353,8 +379,10 @@ async function assignDeliveryMember(req, res) {
 }
 
 async function deleteOrder(req, res) {
-  const order = await Order.findByIdAndDelete(req.params.id);
+  const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ message: 'Order not found' });
+  await syncTiffinSubscriptionStatus({ ...order.toObject(), status: 'CANCELLED', type: order.type });
+  await Order.findByIdAndDelete(req.params.id);
   res.json({ message: 'Order deleted' });
 }
 

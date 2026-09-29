@@ -13,6 +13,7 @@
   --shadow: 0 12px 28px rgba(50, 29, 15, 0.08);
 }
 * { box-sizing: border-box; }
+html[data-admin-auth-pending] { visibility: hidden; }
 html, body { margin: 0; min-height: 100%; font-family: Arial, Helvetica, sans-serif; background: var(--bg); color: var(--ink); }
 button, input, select { font: inherit; }
 img { max-width: 100%; display: block; }
@@ -513,3 +514,114 @@ th {
   border-radius: 6px;
 }
 .modal-close:hover { background: var(--panel-soft); }
+
+.tiffin-prep-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.prep-date-label {
+  font-weight: 800;
+  color: var(--brown);
+  font-size: 1.05rem;
+}
+.prep-date-picker {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.prep-date-picker input {
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: white;
+}
+.tiffin-prep-grid {
+  display: grid;
+  grid-template-columns: 1.2fr .8fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.prep-card {
+  padding: 18px;
+}
+.prep-menu-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 10px;
+  color: var(--ink);
+}
+.prep-capture-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.prep-capture-controls label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.prep-capture-controls select {
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  padding: 8px 10px;
+}
+.active-plan-group {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.active-plan-group:first-of-type {
+  border-top: 0;
+}
+.active-plan-group h4 {
+  margin: 0 0 8px;
+  color: var(--brown);
+}
+.active-plan-group p {
+  margin: 6px 0;
+  color: var(--muted);
+}
+.prep-items-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+.prep-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.prep-item-row span {
+  color: var(--muted);
+}
+.prep-item-row strong {
+  color: var(--brown);
+  font-size: 1.05rem;
+}
+.prep-empty-state {
+  padding: 22px;
+  border: 1px dashed var(--border);
+  border-radius: 16px;
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+@media (max-width: 900px) {
+  .tiffin-prep-grid,
+  .prep-items-grid,
+  .prep-capture-controls {
+    grid-template-columns: 1fr;
+  }
+}

@@ -4,7 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sattwik Kitchen Dashboard</title>
+  <script>
+    try {
+      if (!localStorage.getItem('sattwikToken')) window.location.replace('/admin/login.html');
+      else document.documentElement.dataset.adminAuthPending = 'true';
+    } catch (error) {
+      window.location.replace('/admin/login.html');
+    }
+  </script>
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="admin.css" />
+  <link rel="stylesheet" href="/theme.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="dashboard-body">
@@ -22,6 +32,7 @@
       <button class="nav-item" data-view="custom">Custom & Catering</button>
       <button class="nav-item" data-view="exports">Exports</button>
       <button class="nav-item" data-view="admins">Add Admin</button>
+      <button class="nav-item" data-view="tiffinPreparation">Tiffin Preparation</button>
       <button class="nav-item" data-view="deliveryMembers">Delivery Members</button>
       <button class="nav-item" data-view="security">Change Password</button>
     </nav>
@@ -164,6 +175,23 @@
       <div class="panel card">
         <div class="panel-head"><h3>Existing admins</h3></div>
         <div id="adminsTable" class="table-shell"></div>
+      </div>
+    </section>
+
+    <section id="tiffinPreparationView" class="view-panel">
+      <div class="panel card">
+        <div class="panel-head"><h3>Tiffin Preparation</h3></div>
+        <div class="tiffin-prep-toolbar">
+          <button id="prepPrevDay" type="button" class="btn btn-secondary">Previous Day</button>
+          <div id="prepDateLabel" class="prep-date-label">Monday, September 29, 2026</div>
+          <button id="prepNextDay" type="button" class="btn btn-secondary">Next Day</button>
+          <label class="prep-date-picker">
+            <span>Select Date</span>
+            <input id="prepDatePicker" type="date" />
+          </label>
+        </div>
+        <p id="prepStatusMessage" class="form-message" aria-live="polite"></p>
+        <div id="tiffinPreparationContent"></div>
       </div>
     </section>
 

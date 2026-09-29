@@ -18,6 +18,57 @@ const TIFFIN_LABELS = {
   'curry-only': 'Curry-Only Package'
 };
 
+const TIFFIN_PREPARATION_RULES = {
+  full: {
+    single: { dal: 'small', curry: 'small', chapati: 4, rice: 1, curd: 'small' },
+    couple: { dal: 'medium', curry: 'medium', chapati: 4, rice: 1, curd: 'big' },
+    family: { dal: 'large', curry: 'large', chapati: 6, rice: 1, curd: 'big' }
+  },
+  'curry-only': {
+    single: { dal: 'small', curry: 'small', chapati: 0, rice: 0, curd: null },
+    couple: { dal: 'medium', curry: 'medium', chapati: 0, rice: 0, curd: null },
+    family: { dal: 'large', curry: 'large', chapati: 0, rice: 0, curd: null }
+  }
+};
+
+const TIFFIN_MENU_BY_WEEKDAY = {
+  Monday: {
+    dalOptions: ['Palak Dal', 'Ridge Gourd Dal'],
+    curryOptions: ['Brinjal Masala', 'Cauliflower Curry'],
+    rice: ['White Rice'],
+    chapati: ['4 Chapati'],
+    curd: ['Homemade Curd']
+  },
+  Tuesday: {
+    dalOptions: ['Tomato Dal', 'Kale Dal'],
+    curryOptions: ['Cabbage Chutney', 'Capsicum Masala'],
+    rice: ['White Rice'],
+    chapati: ['4 Chapati'],
+    curd: ['Homemade Curd']
+  },
+  Wednesday: {
+    dalOptions: ['Mango Dal', 'Dal Tadka'],
+    curryOptions: ['Potato/Bhindi Fry'],
+    rice: ['Jeera Rice'],
+    chapati: ['4 Chapati'],
+    curd: ['Homemade Curd'],
+    sweet: ['Sweet']
+  },
+  Thursday: {
+    dalOptions: ['Sambar'],
+    curryOptions: ['Aloo Tomato Curry', 'Bhindi Curry'],
+    rice: ['White Rice'],
+    chapati: ['4 Chapati'],
+    curd: ['Homemade Curd']
+  },
+  Friday: {
+    dalOptions: ['Chole Masala', 'Paneer Curry'],
+    curryOptions: ['Poori', 'Chapati'],
+    rice: ['Veg Biryani', 'Fried Rice'],
+    curd: ['Raita']
+  }
+};
+
 function tiffinDisplayName(packageType, size) {
   const p = TIFFIN_LABELS[packageType] || packageType;
   const s = size ? size[0].toUpperCase() + size.slice(1) : '';
@@ -42,6 +93,8 @@ module.exports = {
   REVENUE_STATUSES,
   TIFFIN_PRICES,
   TIFFIN_LABELS,
+  TIFFIN_PREPARATION_RULES,
+  TIFFIN_MENU_BY_WEEKDAY,
   tiffinDisplayName,
   dateMatch
 };

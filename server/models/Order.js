@@ -5,6 +5,8 @@ const itemSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
   productName: { type: String, required: true },
   category: { type: String, default: 'General' },
+  fulfillment: { type: String, enum: ['pickup', 'delivery'], default: 'pickup' },
+  deliveryStatus: { type: String, enum: ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'], default: null },
   priceAtPurchase: { type: Number, required: true, min: 0 },
   quantity: { type: Number, required: true, min: 1 },
   subtotal: { type: Number, required: true, min: 0 }
@@ -15,6 +17,7 @@ const orderSchema = new mongoose.Schema({
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
   customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: false, index: true },
   items: { type: [itemSchema], default: [] },
+  fulfillment: { type: String, enum: ['pickup', 'delivery', 'mixed'], default: 'pickup' },
   type: { type: String, enum: ['product', 'tiffin', 'catering', 'custom'], default: 'product' },
   tiffinPlan: {
     packageType: { type: String, enum: ['full', 'curry-only'], default: null },

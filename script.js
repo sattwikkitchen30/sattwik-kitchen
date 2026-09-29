@@ -27,34 +27,28 @@ const customerLogoutBtn = document.getElementById('customerLogoutBtn');
 let customerToken = localStorage.getItem('sattwikCustomerToken') || '';
 const customOrderAmount = document.getElementById('customOrderAmount');
 
-// ONLY these 6 items are orderable - everything else is display-only
-const ORDERABLE_ITEMS = new Set([
-  'Full Meal Package (Single)',
-  'Full Meal Package (Couple)', 
-  'Full Meal Package (Family)',
-  'Curry-Only Package (Single)',
-  'Curry-Only Package (Couple)',
-  'Curry-Only Package (Family)',
-  'Full Meal Package: Single',
-  'Full Meal Package: Couple',
-  'Full Meal Package: Family',
-  'Curry-Only Package: Single',
-  'Curry-Only Package: Couple',
-  'Curry-Only Package: Family',
-  'Curry option 1',
-  'Curry option 2',
-  'Curry option 3'
-]);
+function normalizeProductName(itemName) {
+  if (!itemName || typeof itemName !== 'string') return '';
+  return itemName
+    .trim()
+    .replace(/^Tiffin Plan\s*[-—–:]*\s*/i, '')
+    .replace(/\s*[-—–:]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isDeliveryEligibleName(itemName) {
+  const normalized = normalizeProductName(itemName);
+  if (!normalized) return false;
+  return /^(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(\s*(Single|Couple|Family)\s*\)$/i.test(normalized);
+}
+
+function getOrderItemFulfillment(itemName, category = 'product') {
+  return category === 'tiffin' && isDeliveryEligibleName(itemName) ? 'delivery' : 'pickup';
+}
 
 function isOrderableItem(itemName) {
-  if (!itemName || typeof itemName !== 'string') return false;
-  const trimmed = itemName.trim();
-  if (ORDERABLE_ITEMS.has(trimmed)) return true;
-  const unPrefixed = trimmed.replace(/^Tiffin Plan\s*[-—–]\s*/i, '').trim();
-  if (ORDERABLE_ITEMS.has(unPrefixed)) return true;
-  const normalized = unPrefixed.replace(/:\s*([A-Za-z]+)/, ' ($1)');
-  if (ORDERABLE_ITEMS.has(normalized)) return true;
-  return false;
+  return Boolean(normalizeProductName(itemName));
 }
 
 // Modal Elements
@@ -428,8 +422,7 @@ function createProductCard(product) {
   const stockDisplay = isOutOfStock ? 'Out of stock' : `${product.stock} available`;
   const stockClass = isOutOfStock ? 'out-of-stock' : 'in-stock';
 
-  // ONLY check if this specific item is in the allowed orderable list
-  const isOrderable = isOrderableItem(product.name) && !isOutOfStock;
+  const isOrderable = !isOutOfStock;
 
   card.innerHTML = `
     <div class="product-image-shell">
@@ -448,9 +441,7 @@ function createProductCard(product) {
         <button type="button" class="qty-plus" aria-label="Increase ${product.name} quantity">+</button>
       </div>
       <span class="auto-cart-note">Updates cart automatically</span>
-      ` : `
-      <span class="display-only-note">Display only</span>
-      `}
+      ` : ''}
     </div>
   `;
 
@@ -474,9 +465,8 @@ function updateQty(name, price, nextQty, maxStock = null, category = 'product', 
   const currentQty = cart.get(name)?.qty || 0;
   const safeQty = Math.max(0, Number(nextQty) || 0);
   
-  // ONLY allow the 6 specific orderable items
   if (!isOrderableItem(name) && safeQty > 0) {
-    showToast('Only Full Meal Packages and Curry options can be ordered. This product is display-only.');
+    showToast('This product cannot be ordered right now.');
     return;
   }
   
@@ -559,7 +549,8 @@ function buildWhatsAppText() {
   cart.forEach((item) => {
     const lineTotal = Number(item.price) * Number(item.qty);
     subtotal += lineTotal;
-    lines.push(`• ${item.name} × ${item.qty} — ${money(lineTotal)}`);
+    const fulfillment = getOrderItemFulfillment(item.name, item.category) === 'delivery' ? 'Delivery' : 'Pickup';
+    lines.push(`• ${item.name} × ${item.qty} — ${money(lineTotal)} (${fulfillment})`);
   });
   if (customRequest) lines.push(`• Custom request: ${customRequest}`);
   lines.push('', `Estimated item subtotal: ${money(subtotal)}`);
@@ -573,23 +564,22 @@ function renderCart() {
   let count = 0;
 
   cart.forEach((item) => {
-    // ONLY allow the 6 specific orderable items in cart
-    if (!isOrderableItem(item.name)) {
-      // Remove non-orderable products from cart
-      cart.delete(item.name);
+    if (!item || !isOrderableItem(item.name)) {
+      cart.delete(item?.name || '');
       persistCart();
       return;
     }
-    
+
     subtotal += Number(item.price) * Number(item.qty);
     count += Number(item.qty);
 
     const row = document.createElement('div');
     row.className = 'cart-item';
+    const fulfillmentText = getOrderItemFulfillment(item.name, item.category) === 'delivery' ? 'Delivery eligible' : 'Pickup only';
     row.innerHTML = `
       <div class="cart-item-main">
         <strong>${item.name}</strong>
-        <small>${money(item.price)} each</small>
+        <small>${money(item.price)} each • ${fulfillmentText}</small>
       </div>
       <div class="cart-item-price">${money(Number(item.price) * Number(item.qty))}</div>
       <div class="cart-item-stepper">
@@ -680,7 +670,6 @@ const fetchProducts = async () => {
 function cleanCartForTiffinOnly() {
   let cleaned = false;
   cart.forEach((item, name) => {
-    // ONLY keep the 6 allowed orderable items
     if (!isOrderableItem(name)) {
       cart.delete(name);
       cleaned = true;
@@ -730,14 +719,13 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
     return;
   }
 
-  // Validate that ONLY the 6 allowed items are in the cart
   const cartItemsList = Array.from(cart.values());
-  const hasNonOrderableItems = cartItemsList.some((item) => !isOrderableItem(item.name));
-  
+  const hasNonOrderableItems = cartItemsList.some((item) => !item || !isOrderableItem(item.name));
+
   if (hasNonOrderableItems) {
-    customerFormStatus.textContent = 'Only Full Meal Packages and Curry options can be ordered. Please remove non-orderable items from your cart.';
+    customerFormStatus.textContent = 'One or more cart items are invalid. Please remove them and try again.';
     customerFormStatus.classList.add('ready');
-    showToast('Only Full Meal Packages and Curry options can be ordered.');
+    showToast('One or more cart items are invalid.');
     return;
   }
 
@@ -758,14 +746,13 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
     totalAmount: calculatedTotal,
     items: cartItemsList.filter((item) => item.category !== 'tiffin').map((item) => ({
       productId: productMap.get(item.name)?._id || null,
-      productName: item.name,
-      quantity: item.qty,
-      price: item.price
+      quantity: item.qty
     })),
     tiffinPlans: cartItemsList.filter((item) => item.category === 'tiffin').map((item) => ({
       packageType: item.packageType,
       size: item.size,
-      quantity: item.qty
+      quantity: item.qty,
+      fulfillment: getOrderItemFulfillment(item.name)
     })),
     type: customRequest ? 'custom' : (cartItemsList.some((item) => item.category === 'tiffin') ? 'tiffin' : 'product')
   };
@@ -799,7 +786,7 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
     }
 
     const order = data.order;
-    const itemsText = cartItemsList.map((item) => `• ${item.name} × ${item.qty} — ${money(item.price * item.qty)}`).join('\n');
+    const itemsText = cartItemsList.map((item) => `• ${item.name} × ${item.qty} — ${money(item.price * item.qty)} (${getOrderItemFulfillment(item.name, item.category) === 'delivery' ? 'Delivery' : 'Pickup'})`).join('\n');
     const whatsappText = `Hi Sattwik Kitchen, I have placed order ${order.orderId || 'SK-ORDER'}.\n\nCustomer: ${customerFirstName.value.trim()} ${customerLastName.value.trim()}\nPhone: ${customerPhone.value.trim()}\nEmail: ${customerEmail.value.trim()}\nArea: ${customerArea.value.trim() || 'Not provided'}\n\nItems:\n${itemsText}${customRequest ? `\n• Custom request: ${customRequest}` : ''}\n\nTotal: ${money(order.totalAmount || 0)}\nPlease confirm my order.`;
     const whatsappUrl = `https://wa.me/16725881282?text=${encodeURIComponent(whatsappText)}`;
 

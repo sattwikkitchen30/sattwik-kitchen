@@ -58,6 +58,11 @@ async function loadProfile() {
       window.adminSocket = io({ auth: { token } });
       window.adminSocket.on('order:updated', loadDashboardData);
     }
+    document.documentElement.removeAttribute('data-admin-auth-pending');
+    if (window.location.pathname.endsWith('/dashboard.html')) {
+      loadDashboardData();
+      loadAdmins();
+    }
     redirectToDashboard();
   } catch (error) {
     localStorage.removeItem('sattwikToken');
@@ -118,7 +123,12 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
   document.getElementById('fromDate')?.addEventListener('change', loadDashboardData);
   document.getElementById('toDate')?.addEventListener('change', loadDashboardData);
 
-  loadDashboardData();
+}
+
+function getLocalDateString(date = new Date()) {
+  const value = new Date(date);
+  const offset = value.getTimezoneOffset();
+  return new Date(value.getTime() - offset * 60000).toISOString().slice(0, 10);
 }
 
 function currency(value) {
@@ -169,9 +179,177 @@ async function loadDashboardData() {
     await renderCustomersTable();
     await renderDeliveryMembersTable();
     renderExports();
+    await loadTiffinPreparation();
   } catch (error) {
     console.error(error);
   }
+}
+
+async function loadTiffinPreparation(dateString = state.tiffinPreparationDate || getLocalDateString(new Date())) {
+  state.tiffinPreparationDate = dateString;
+  const datePicker = document.getElementById('prepDatePicker');
+  const dateLabelEl = document.getElementById('prepDateLabel');
+  const statusMessage = document.getElementById('prepStatusMessage');
+  const content = document.getElementById('tiffinPreparationContent');
+  if (!datePicker || !dateLabelEl || !content) return;
+
+  datePicker.value = dateString;
+  dateLabelEl.textContent = new Date(`${dateString}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+  try {
+    const data = await api(`/analytics/tiffin-preparation?date=${encodeURIComponent(dateString)}`);
+    const totals = data.totals || {};
+    const counts = data.activePlanCounts || { full: { single: 0, couple: 0, family: 0 }, 'curry-only': { single: 0, couple: 0, family: 0 } };
+    const selectedMenu = data.selectedMenu || { dalOption: 'Not selected', curryOption: 'Not selected' };
+    const menu = data.menu || null;
+
+    statusMessage.textContent = data.message || '';
+
+    if (!data.serviceExists || !menu) {
+      content.innerHTML = `
+        <div class="prep-empty-state">
+          <strong>No tiffin service on this day.</strong>
+        </div>
+      `;
+      return;
+    }
+
+    const rows = [
+      ['Small Curries', totals.smallCurries || 0],
+      ['Medium Curries', totals.mediumCurries || 0],
+      ['Large Curries', totals.largeCurries || 0],
+      ['Small Dal', totals.smallDal || 0],
+      ['Medium Dal', totals.mediumDal || 0],
+      ['Large Dal', totals.largeDal || 0],
+      ['Rice Boxes', totals.riceBoxes || 0],
+      ['Chapathi Count', totals.chapathiCount || 0],
+      ['Small Curd', totals.smallCurd || 0],
+      ['Big Curd', totals.bigCurd || 0]
+    ];
+
+    const menuRows = [
+      `<li><strong>Dal:</strong> ${menu.dalOptions?.join(' / ') || 'Not available'}</li>`,
+      `<li><strong>Curry:</strong> ${menu.curryOptions?.join(' / ') || 'Not available'}</li>`,
+      `<li><strong>Rice:</strong> ${menu.rice?.join(' / ') || 'Not available'}</li>`,
+      `<li><strong>Chapati:</strong> ${menu.chapati?.join(' / ') || 'Not available'}</li>`,
+      `<li><strong>Curd:</strong> ${menu.curd?.join(' / ') || 'Not available'}</li>`
+    ];
+
+    content.innerHTML = `
+      <div class="tiffin-prep-grid">
+        <div class="panel card prep-card">
+          <div class="panel-head"><h3>Today’s Menu</h3></div>
+          <ul class="prep-menu-list">${menuRows.join('')}</ul>
+          <div class="prep-capture-controls">
+            <label>
+              <span>Dal</span>
+              <select id="prepDalOptionSelect">
+                <option value="Not selected" ${selectedMenu.dalOption === 'Not selected' ? 'selected' : ''}>Not selected</option>
+                ${menu.dalOptions.map((option) => `<option value="${option}" ${selectedMenu.dalOption === option ? 'selected' : ''}>${option}</option>`).join('')}
+              </select>
+            </label>
+            <label>
+              <span>Curry</span>
+              <select id="prepCurryOptionSelect">
+                <option value="Not selected" ${selectedMenu.curryOption === 'Not selected' ? 'selected' : ''}>Not selected</option>
+                ${menu.curryOptions.map((option) => `<option value="${option}" ${selectedMenu.curryOption === option ? 'selected' : ''}>${option}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="panel card prep-card">
+          <div class="panel-head"><h3>Active Tiffin Plans</h3></div>
+          <div class="active-plan-group">
+            <h4>Full Meal</h4>
+            <p>Single: ${counts.full.single || 0}</p>
+            <p>Couple: ${counts.full.couple || 0}</p>
+            <p>Family: ${counts.full.family || 0}</p>
+          </div>
+          <div class="active-plan-group">
+            <h4>Curry-Only</h4>
+            <p>Single: ${counts['curry-only'].single || 0}</p>
+            <p>Couple: ${counts['curry-only'].couple || 0}</p>
+            <p>Family: ${counts['curry-only'].family || 0}</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel card prep-card">
+        <div class="panel-head"><h3>Daily Items</h3></div>
+        <div class="prep-items-grid">
+          ${rows.map(([label, value]) => `
+            <div class="prep-item-row">
+              <span>${label}</span>
+              <strong>${value}</strong>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+
+    document.getElementById('prepDalOptionSelect')?.addEventListener('change', async (event) => {
+      try {
+        const dalValue = event.target.value || 'Not selected';
+        const curryValue = document.getElementById('prepCurryOptionSelect')?.value || 'Not selected';
+        await api('/analytics/tiffin-preparation/menu', {
+          method: 'PUT',
+          body: JSON.stringify({ date: dateString, dalOption: dalValue, curryOption: curryValue })
+        });
+        statusMessage.textContent = 'Menu choice saved.';
+      } catch (error) {
+        statusMessage.textContent = error.message || 'Could not save menu selection.';
+      }
+    });
+
+    document.getElementById('prepCurryOptionSelect')?.addEventListener('change', async (event) => {
+      try {
+        const curryValue = event.target.value || 'Not selected';
+        const dalValue = document.getElementById('prepDalOptionSelect')?.value || 'Not selected';
+        await api('/analytics/tiffin-preparation/menu', {
+          method: 'PUT',
+          body: JSON.stringify({ date: dateString, dalOption: dalValue, curryOption: curryValue })
+        });
+        statusMessage.textContent = 'Menu choice saved.';
+      } catch (error) {
+        statusMessage.textContent = error.message || 'Could not save menu selection.';
+      }
+    });
+  } catch (error) {
+    statusMessage.textContent = error.message || 'Could not load tiffin preparation data.';
+    content.innerHTML = '<div class="prep-empty-state"><strong>Could not load data.</strong></div>';
+  }
+}
+
+function bindTiffinPreparationControls() {
+  const prevDayBtn = document.getElementById('prepPrevDay');
+  if (prevDayBtn) {
+    prevDayBtn.addEventListener('click', () => {
+      const date = new Date(`${state.tiffinPreparationDate || getLocalDateString(new Date())}T12:00:00`);
+      date.setDate(date.getDate() - 1);
+      loadTiffinPreparation(getLocalDateString(date));
+    });
+  }
+
+  const nextDayBtn = document.getElementById('prepNextDay');
+  if (nextDayBtn) {
+    nextDayBtn.addEventListener('click', () => {
+      const date = new Date(`${state.tiffinPreparationDate || getLocalDateString(new Date())}T12:00:00`);
+      date.setDate(date.getDate() + 1);
+      loadTiffinPreparation(getLocalDateString(date));
+    });
+  }
+
+  const datePicker = document.getElementById('prepDatePicker');
+  if (datePicker) {
+    datePicker.addEventListener('change', () => {
+      if (datePicker.value) loadTiffinPreparation(datePicker.value);
+    });
+  }
+}
+
+if (window.location.pathname.endsWith('/dashboard.html')) {
+  bindTiffinPreparationControls();
 }
 
 function renderStats(data) {
@@ -285,16 +463,21 @@ async function renderOrdersTable() {
     <table>
       <thead>
         <tr>
-          <th>Order</th><th>Customer</th><th>Items</th><th>Type</th><th>Date</th><th>Status</th><th>Delivery member</th><th>Total</th>
+          <th>Order</th><th>Customer</th><th>Items</th><th>Type</th><th>Fulfillment</th><th>Date</th><th>Status</th><th>Delivery member</th><th>Total</th>
         </tr>
       </thead>
       <tbody>
-        ${orders.map((order) => `
+        ${orders.map((order) => {
+          const items = order.items || [];
+          const hasDeliveryItem = items.some((it) => it.fulfillment === 'delivery');
+          const fulfillmentLabel = order.fulfillment === 'mixed' ? 'Mixed' : (hasDeliveryItem ? 'Delivery' : 'Pickup');
+          return `
           <tr>
             <td>${order.orderId}</td>
             <td>${order.customerDoc ? `${order.customerDoc.firstName} ${order.customerDoc.lastName}` : '—'}</td>
-            <td>${(order.items || []).map((it) => `${it.productName} × ${it.quantity}`).join('<br>') || (order.customRequest ? `Custom: ${order.customRequest}` : '—')}</td>
+            <td>${items.map((it) => `${it.productName} × ${it.quantity} (${it.fulfillment === 'delivery' ? 'Delivery' : 'Pickup'})`).join('<br>') || (order.customRequest ? `Custom: ${order.customRequest}` : '—')}</td>
             <td>${order.type}</td>
+            <td>${fulfillmentLabel}</td>
             <td>${dateLabel(order.createdAt)}</td>
             <td>
               <select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}">
@@ -303,15 +486,18 @@ async function renderOrdersTable() {
               <span class="badge ${String(order.status).toLowerCase()}">${order.status}</span>
             </td>
             <td>
-              <select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
-                <option value="">Unassigned</option>
-                ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${member.name}</option>`).join('')}
-              </select>
-              <button class="assign-btn" data-order-id="${order._id}">Assign</button>
+              ${hasDeliveryItem ? `
+                <select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
+                  <option value="">Unassigned</option>
+                  ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${member.name}</option>`).join('')}
+                </select>
+                <button class="assign-btn" data-order-id="${order._id}">Assign</button>
+              ` : '<span class="badge pickup">Pickup only</span>'}
             </td>
             <td>${currency(order.totalAmount)}</td>
           </tr>
-        `).join('') || '<tr><td colspan="8">No orders found</td></tr>'}
+        `;
+        }).join('') || '<tr><td colspan="9">No orders found</td></tr>'}
       </tbody>
     </table>
   `;
@@ -962,13 +1148,6 @@ async function loadAdmins() {
     `;
   }
 }
-
-
-// Load admins when dashboard opens
-if (window.location.pathname.endsWith('/dashboard.html')) {
-  loadAdmins();
-}
-
 
 
 // ===============================

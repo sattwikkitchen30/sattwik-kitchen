@@ -1,7 +1,10 @@
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const Product = require('../models/Product');
-const { REVENUE_STATUSES, dateMatch } = require('../utils/constants');
+const TiffinSubscription = require('../models/TiffinSubscription');
+const TiffinMenuSelection = require('../models/TiffinMenuSelection');
+const { REVENUE_STATUSES, dateMatch, TIFFIN_MENU_BY_WEEKDAY } = require('../utils/constants');
+const { parseDateInput, formatDateKey, getWeekdayName, getMenuForDate, dateLabel, startOfDay, endOfDay, buildPreparationTotals, buildActivePlanCounts, syncExpiredTiffinSubscriptions } = require('../utils/tiffinPreparation');
 
 const money = (n) => Math.round((n || 0) * 100) / 100;
 
@@ -329,4 +332,90 @@ async function customOrders(req, res) {
   });
 }
 
-module.exports = { overview, revenue, products, categories, customers, orderStatus, tiffins, customOrders };
+async function tiffinPreparation(req, res) {
+  const requestedDate = parseDateInput(req.query.date || new Date());
+  const dateKey = formatDateKey(requestedDate);
+  const selectedDate = new Date(`${dateKey}T12:00:00`);
+  const weekday = getWeekdayName(selectedDate);
+  const menu = getMenuForDate(selectedDate);
+  const selection = await TiffinMenuSelection.findOne({ date: dateKey }).lean();
+
+  if (!menu) {
+    return res.json({
+      selectedDate: dateKey,
+      weekday,
+      serviceExists: false,
+      dateLabel: dateLabel(selectedDate),
+      menu: null,
+      selectedMenu: selection || { date: dateKey, dalOption: 'Not selected', curryOption: 'Not selected' },
+      activePlanCounts: { full: { single: 0, couple: 0, family: 0 }, 'curry-only': { single: 0, couple: 0, family: 0 } },
+      totals: {
+        smallCurries: 0,
+        mediumCurries: 0,
+        largeCurries: 0,
+        smallDal: 0,
+        mediumDal: 0,
+        largeDal: 0,
+        riceBoxes: 0,
+        chapathiCount: 0,
+        smallCurd: 0,
+        bigCurd: 0
+      },
+      message: 'No tiffin service on this day.'
+    });
+  }
+
+  await syncExpiredTiffinSubscriptions(new Date());
+
+  const subscriptions = await TiffinSubscription.find({
+    status: { $ne: 'CANCELLED' },
+    startDate: { $lte: endOfDay(selectedDate) },
+    endDate: { $gte: startOfDay(selectedDate) }
+  }).lean();
+
+  const totals = buildPreparationTotals(subscriptions);
+  const activePlanCounts = buildActivePlanCounts(subscriptions);
+
+  res.json({
+    selectedDate: dateKey,
+    weekday,
+    serviceExists: true,
+    dateLabel: dateLabel(selectedDate),
+    menu,
+    selectedMenu: selection || { date: dateKey, dalOption: 'Not selected', curryOption: 'Not selected' },
+    activePlanCounts,
+    totals,
+    message: ''
+  });
+}
+
+async function saveTiffinMenuSelection(req, res) {
+  const { date: dateValue, dalOption, curryOption } = req.body || {};
+  const selectedDate = parseDateInput(dateValue || new Date());
+  const dateKey = formatDateKey(selectedDate);
+  const menu = getMenuForDate(selectedDate);
+
+  if (!menu) {
+    return res.status(400).json({ message: 'No tiffin service on this day.' });
+  }
+
+  const nextDal = String(dalOption || 'Not selected');
+  const nextCurry = String(curryOption || 'Not selected');
+
+  const validDal = !nextDal || nextDal === 'Not selected' || menu.dalOptions.includes(nextDal);
+  const validCurry = !nextCurry || nextCurry === 'Not selected' || menu.curryOptions.includes(nextCurry);
+
+  if (!validDal || !validCurry) {
+    return res.status(400).json({ message: 'Invalid menu option selected.' });
+  }
+
+  const selection = await TiffinMenuSelection.findOneAndUpdate(
+    { date: dateKey },
+    { $set: { date: dateKey, dalOption: nextDal, curryOption: nextCurry, createdBy: req.admin?.id || null } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  ).lean();
+
+  res.json({ message: 'Tiffin menu selection saved.', selection });
+}
+
+module.exports = { overview, revenue, products, categories, customers, orderStatus, tiffins, customOrders, tiffinPreparation, saveTiffinMenuSelection };

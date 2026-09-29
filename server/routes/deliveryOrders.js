@@ -8,16 +8,26 @@ router.get('/', deliveryAuthRequired, async (req, res) => {
   // Only show orders assigned to this delivery member
   const orders = await Order.find({
     deliveryMemberId: req.deliveryMember._id,
-    status: { $in: ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'] }
+    status: { $in: ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'] },
+    'items.fulfillment': 'delivery'
   }).populate('customer', 'firstName lastName phone email address area').lean();
 
+  const deliveryOrders = orders.map((order) => {
+    const items = (order.items || []).filter((item) => item.fulfillment === 'delivery');
+    return {
+      ...order,
+      items,
+      totalAmount: items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
+    };
+  });
+
   const priority = { OUT_FOR_DELIVERY: 0, ACCEPTED: 1, DELIVERED: 2, CANCELLED: 3 };
-  orders.sort((a, b) => {
+  deliveryOrders.sort((a, b) => {
     const statusOrder = (priority[a.status] ?? 99) - (priority[b.status] ?? 99);
     if (statusOrder !== 0) return statusOrder;
     return new Date(b.updatedAt || b.acceptedAt || b.placedAt || b.createdAt) - new Date(a.updatedAt || a.acceptedAt || a.placedAt || a.createdAt);
   });
-  res.json({ orders });
+  res.json({ orders: deliveryOrders });
 });
 
 router.put('/:id/status', deliveryAuthRequired, async (req, res) => {
@@ -28,9 +38,15 @@ router.put('/:id/status', deliveryAuthRequired, async (req, res) => {
 
   const currentStatus = requested === 'OUT_FOR_DELIVERY' ? 'ACCEPTED' : 'OUT_FOR_DELIVERY';
   const order = await Order.findOneAndUpdate(
-    { _id: req.params.id, status: currentStatus, deliveryMemberId: req.deliveryMember._id },
-    { $set: { status: requested, ...(requested === 'OUT_FOR_DELIVERY' ? { outForDeliveryAt: new Date() } : { deliveredAt: new Date() }) } },
-    { new: true, runValidators: true }
+    { _id: req.params.id, status: currentStatus, deliveryMemberId: req.deliveryMember._id, 'items.fulfillment': 'delivery' },
+    {
+      $set: {
+        status: requested,
+        ...(requested === 'OUT_FOR_DELIVERY' ? { outForDeliveryAt: new Date() } : { deliveredAt: new Date() }),
+        'items.$[deliveryItem].deliveryStatus': requested
+      }
+    },
+    { new: true, runValidators: true, arrayFilters: [{ 'deliveryItem.fulfillment': 'delivery' }] }
   );
   
   if (!order) return res.status(409).json({ message: 'Order status or assignment has changed. Refresh the dashboard.' });

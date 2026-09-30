@@ -7,6 +7,7 @@ router.post('/', customerAuthRequired, c.createOrder);
 router.get('/', authRequired, c.listOrders);
 router.get('/:id', authRequired, c.getOrder);
 router.put('/:id/status', authRequired, c.updateStatus);
+router.put('/:id/tiffin-end-date', authRequired, c.updateTiffinEndDate);
 router.put('/:id/assign', authRequired, c.assignDeliveryMember);
 router.delete('/:id', authRequired, c.deleteOrder);
 

@@ -58,6 +58,37 @@ function dateLabel(dateValue) {
   return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(date);
 }
 
+function getSubscriptionServiceDates(startDateValue, endDateValue = null) {
+  const start = startOfDay(startDateValue);
+  if (!start) {
+    return { startDate: null, endDate: null, serviceDates: [] };
+  }
+
+  const serviceDates = [];
+  const cursor = new Date(start);
+  while (serviceDates.length < 20) {
+    if (isServiceDay(cursor)) {
+      serviceDates.push(new Date(cursor));
+    }
+    cursor.setDate(cursor.getDate() + 1);
+    if (cursor.getTime() - start.getTime() > 1000 * 60 * 60 * 24 * 365) {
+      break;
+    }
+  }
+
+  const resolvedEnd = serviceDates[serviceDates.length - 1] || start;
+  const explicitEnd = endDateValue ? startOfDay(endDateValue) : null;
+  const normalizedEnd = explicitEnd && serviceDates.length === 20 && explicitEnd.getTime() === resolvedEnd.getTime()
+    ? explicitEnd
+    : resolvedEnd;
+
+  return {
+    startDate: start,
+    endDate: normalizedEnd,
+    serviceDates
+  };
+}
+
 function startOfDay(dateValue) {
   const date = getLocalDate(dateValue);
   if (!date) return null;
@@ -164,6 +195,7 @@ module.exports = {
   isServiceDay,
   getMenuForDate,
   dateLabel,
+  getSubscriptionServiceDates,
   startOfDay,
   endOfDay,
   buildPreparationTotals,

@@ -1,6 +1,6 @@
 const API_PREFIX = '/api';
 let token = localStorage.getItem('sattwikToken') || '';
-let state = { overview: null, orders: [], products: [], customers: [], custom: null };
+let state = { overview: null, orders: [], products: [], customers: [], custom: null, ordersFulfillment: 'delivery' };
 
 const loginForm = document.getElementById('loginForm');
 const loginMessage = document.getElementById('loginMessage');
@@ -122,6 +122,15 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
   document.getElementById('typeFilter')?.addEventListener('change', loadDashboardData);
   document.getElementById('fromDate')?.addEventListener('change', loadDashboardData);
   document.getElementById('toDate')?.addEventListener('change', loadDashboardData);
+  document.querySelectorAll('[data-fulfillment-tab]').forEach((button) => button.addEventListener('click', async () => {
+    state.ordersFulfillment = button.dataset.fulfillmentTab;
+    document.querySelectorAll('[data-fulfillment-tab]').forEach((tab) => {
+      const active = tab === button;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    await renderOrdersTable();
+  }));
 
 }
 
@@ -135,10 +144,35 @@ function currency(value) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value || 0));
 }
 
+function pickupStatusForOrder(order, items) {
+  const rawStatus = String(items.find((item) => item.fulfillment === 'pickup')?.deliveryStatus || (order.fulfillment === 'pickup' ? order.status : 'PENDING')).toUpperCase();
+  if (rawStatus === 'CANCELLED') return 'CANCELLED';
+  if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY', 'DELIVERED', 'OUT_FOR_DELIVERY'].includes(rawStatus)) return 'ACCEPTED';
+  return 'PENDING';
+}
+
 function dateLabel(date) {
   const d = new Date(date);
   if (Number.isNaN(d.valueOf())) return '—';
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function toDateOnly(dateValue) {
+  const value = new Date(dateValue);
+  if (Number.isNaN(value.getTime())) return null;
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function getTiffinRowState(endDate) {
+  const finalEnd = toDateOnly(endDate);
+  const today = toDateOnly(new Date());
+  if (!finalEnd || !today) return { className: '', label: '' };
+  const diff = Math.ceil((finalEnd - today) / (1000 * 60 * 60 * 24));
+  if (diff < 0) return { className: 'row-expired', label: 'Subscription plan ended' };
+  if (diff <= 3) return { className: 'row-warning', label: 'Ends soon' };
+  return { className: '', label: '' };
 }
 
 function parseFilters() {
@@ -214,17 +248,17 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
       return;
     }
 
-    const rows = [
-      ['Small Curries', totals.smallCurries || 0],
-      ['Medium Curries', totals.mediumCurries || 0],
-      ['Large Curries', totals.largeCurries || 0],
-      ['Small Dal', totals.smallDal || 0],
-      ['Medium Dal', totals.mediumDal || 0],
-      ['Large Dal', totals.largeDal || 0],
-      ['Rice Boxes', totals.riceBoxes || 0],
-      ['Chapathi Count', totals.chapathiCount || 0],
-      ['Small Curd', totals.smallCurd || 0],
-      ['Big Curd', totals.bigCurd || 0]
+    const dailyItemRows = [
+      { item: 'Dal', quantity: 'Small', count: totals.smallDal || 0 },
+      { item: 'Dal', quantity: 'Medium', count: totals.mediumDal || 0 },
+      { item: 'Dal', quantity: 'Large', count: totals.largeDal || 0 },
+      { item: 'Curries', quantity: 'Small', count: totals.smallCurries || 0 },
+      { item: 'Curries', quantity: 'Medium', count: totals.mediumCurries || 0 },
+      { item: 'Curries', quantity: 'Large', count: totals.largeCurries || 0 },
+      { item: 'Curd', quantity: 'Small', count: totals.smallCurd || 0 },
+      { item: 'Curd', quantity: 'Big', count: totals.bigCurd || 0 },
+      { item: 'Rice', quantity: '—', count: totals.riceBoxes || 0 },
+      { item: 'Chapathi', quantity: '—', count: totals.chapathiCount || 0 }
     ];
 
     const menuRows = [
@@ -277,13 +311,25 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
 
       <div class="panel card prep-card">
         <div class="panel-head"><h3>Daily Items</h3></div>
-        <div class="prep-items-grid">
-          ${rows.map(([label, value]) => `
-            <div class="prep-item-row">
-              <span>${label}</span>
-              <strong>${value}</strong>
-            </div>
-          `).join('')}
+        <div class="prep-table-wrap">
+          <table class="prep-items-table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Quantity</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${dailyItemRows.map((row) => `
+                <tr>
+                  <td>${row.item}</td>
+                  <td>${row.quantity}</td>
+                  <td>${row.count}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
         </div>
       </div>
     `;
@@ -449,9 +495,10 @@ function renderCustomerInsights(customers) {
 
 async function renderOrdersTable() {
   const params = parseFilters();
+  params.set('fulfillment', state.ordersFulfillment || 'delivery');
   const data = await api(`/orders?${params.toString()}`);
   let deliveryMembers = [];
-  try {
+  if (state.ordersFulfillment === 'delivery') try {
     const deliveryMembersData = await api('/delivery-members');
     deliveryMembers = deliveryMembersData.members || [];
   } catch (error) {
@@ -459,48 +506,103 @@ async function renderOrdersTable() {
   }
   const orders = data.orders || [];
   const table = document.getElementById('ordersTable');
+  const headers = state.ordersFulfillment === 'delivery'
+    ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Start Date', 'End Date', 'Delivery Member', 'Amount']
+    : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Status', 'Section total'];
+
   table.innerHTML = `
     <table>
       <thead>
         <tr>
-          <th>Order</th><th>Customer</th><th>Items</th><th>Type</th><th>Fulfillment</th><th>Date</th><th>Status</th><th>Delivery member</th><th>Total</th>
+          ${headers.map((label) => `<th>${label}</th>`).join('')}
         </tr>
       </thead>
       <tbody>
         ${orders.map((order) => {
           const items = order.items || [];
-          const hasDeliveryItem = items.some((it) => it.fulfillment === 'delivery');
-          const fulfillmentLabel = order.fulfillment === 'mixed' ? 'Mixed' : (hasDeliveryItem ? 'Delivery' : 'Pickup');
+          const pickupStatus = pickupStatusForOrder(order, items);
+          const customer = order.customerDoc || {};
+          const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
+          const isTiffinDelivery = order.type === 'tiffin' && items.some((item) => item.fulfillment === 'delivery');
+
+          if (state.ordersFulfillment === 'delivery' && isTiffinDelivery) {
+            const matchedItem = items.find((item) => item.fulfillment === 'delivery');
+            const itemName = matchedItem?.productName || (
+              order.tiffinPlan?.packageType
+                ? `${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'} Package`
+                : 'Tiffin Plan'
+            );
+            const startDate = order.subscriptionStartDate || order.createdAt;
+            const endDate = order.subscriptionEndDate || order.createdAt;
+            const rowState = getTiffinRowState(endDate);
+            const amount = currency(order.totalAmount || (order.tiffinPlan?.price || 0));
+            return `
+              <tr class="${rowState.className}" data-order-id="${order._id}">
+                <td>${order.orderId}</td>
+                <td><strong>${customerName}</strong></td>
+                <td>${customer.phone || '—'}<br>${customer.email || '—'}</td>
+                <td>${itemName}</td>
+                <td>${order.type}</td>
+                <td>${dateLabel(startDate)}</td>
+                <td>
+                  <div class="tiffin-end-date-cell">
+                    <input type="date" class="tiffin-end-date-input" data-order-id="${order._id}" value="${getLocalDateString(endDate)}" />
+                    <button class="tiffin-end-date-save" data-order-id="${order._id}">Save</button>
+                  </div>
+                  ${rowState.label ? `<div class="tiffin-row-state">${rowState.label}</div>` : ''}
+                </td>
+                <td>
+                  <select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
+                    <option value="">Unassigned</option>
+                    ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${member.name}</option>`).join('')}
+                  </select>
+                </td>
+                <td>${amount}</td>
+              </tr>
+            `;
+          }
+
+          const itemDetails = items.map((it) => `${it.productName} × ${it.quantity} — ${currency(it.priceAtPurchase)} each; ${currency(it.subtotal)} (${it.fulfillment === 'delivery' ? 'Delivery' : 'Pickup'})`).join('<br>');
+          const orderDetails = [itemDetails, order.customRequest ? `Custom request: ${order.customRequest}` : ''].filter(Boolean).join('<br>') || '—';
+          const deliveryAddress = state.ordersFulfillment === 'delivery' ? `<br><strong>Address:</strong> ${order.deliveryAddress || customer.address || customer.area || '—'}` : '<br><strong>Pickup:</strong> Customer pickup';
+          const orderDateTime = new Date(order.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
           return `
           <tr>
             <td>${order.orderId}</td>
-            <td>${order.customerDoc ? `${order.customerDoc.firstName} ${order.customerDoc.lastName}` : '—'}</td>
-            <td>${items.map((it) => `${it.productName} × ${it.quantity} (${it.fulfillment === 'delivery' ? 'Delivery' : 'Pickup'})`).join('<br>') || (order.customRequest ? `Custom: ${order.customRequest}` : '—')}</td>
+            <td><strong>${customerName}</strong><br>${customer.phone || '—'}<br>${customer.email || '—'}${deliveryAddress}</td>
+            <td>${orderDetails}</td>
             <td>${order.type}</td>
-            <td>${fulfillmentLabel}</td>
-            <td>${dateLabel(order.createdAt)}</td>
+            <td>${state.ordersFulfillment === 'delivery' ? 'Delivery' : 'Pickup'}</td>
+            <td>${orderDateTime}</td>
             <td>
-              <select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}">
+              ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}">
                 ${['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].map((status) => `<option value="${status}" ${order.status === status ? 'selected' : ''}>${status.replaceAll('_', ' ')}</option>`).join('')}
-              </select>
-              <span class="badge ${String(order.status).toLowerCase()}">${order.status}</span>
-            </td>
-            <td>
-              ${hasDeliveryItem ? `
-                <select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
-                  <option value="">Unassigned</option>
-                  ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${member.name}</option>`).join('')}
-                </select>
-                <button class="assign-btn" data-order-id="${order._id}">Assign</button>
-              ` : '<span class="badge pickup">Pickup only</span>'}
+              </select><span class="badge ${String(order.status).toLowerCase()}">${order.status}</span>` : pickupStatus === 'PENDING' ? `<select class="pickup-status-select" data-order-id="${order._id}" data-current-status="${pickupStatus}">
+                <option value="PENDING" selected disabled>PENDING</option>
+                <option value="ACCEPTED">ACCEPTED</option>
+                <option value="CANCELLED">CANCELLED</option>
+              </select>` : `<span class="badge ${String(pickupStatus).toLowerCase()}">${pickupStatus}</span>`}
             </td>
             <td>${currency(order.totalAmount)}</td>
           </tr>
         `;
-        }).join('') || '<tr><td colspan="9">No orders found</td></tr>'}
+        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 9 : 8}">No ${state.ordersFulfillment} orders found.</td></tr>`}
       </tbody>
     </table>
   `;
+
+  table.querySelectorAll('.tiffin-end-date-save').forEach((button) => button.addEventListener('click', async () => {
+    const input = table.querySelector(`.tiffin-end-date-input[data-order-id="${button.dataset.orderId}"]`);
+    const endDate = input?.value;
+    if (!endDate) return alert('Please choose an end date.');
+    try {
+      await api(`/orders/${button.dataset.orderId}/tiffin-end-date`, { method: 'PUT', body: JSON.stringify({ endDate }) });
+      await renderOrdersTable();
+    } catch (error) {
+      alert(error.message || 'Could not update the end date');
+    }
+  }));
+
   table.querySelectorAll('.order-status-select').forEach((select) => select.addEventListener('change', async () => {
     const previous = select.dataset.currentStatus;
     try {
@@ -509,6 +611,16 @@ async function renderOrdersTable() {
     } catch (error) {
       select.value = previous;
       alert(error.message || 'Status update failed');
+    }
+  }));
+  table.querySelectorAll('.pickup-status-select').forEach((select) => select.addEventListener('change', async () => {
+    const previous = select.dataset.currentStatus;
+    try {
+      await api(`/orders/${select.dataset.orderId}/status`, { method: 'PUT', body: JSON.stringify({ status: select.value, fulfillment: 'pickup' }) });
+      await loadDashboardData();
+    } catch (error) {
+      select.value = previous;
+      alert(error.message || 'Pickup status update failed');
     }
   }));
   table.querySelectorAll('.assign-btn').forEach((btn) => btn.addEventListener('click', async () => {

@@ -111,6 +111,10 @@
     <section id="ordersView" class="view-panel">
       <div class="panel card">
         <div class="panel-head"><h3>Orders</h3><button id="exportOrdersBtn" class="btn btn-secondary">Export CSV</button></div>
+        <div class="orders-tabs" role="tablist" aria-label="Order fulfillment">
+          <button class="orders-tab active" type="button" role="tab" aria-selected="true" data-fulfillment-tab="delivery">Delivery</button>
+          <button class="orders-tab" type="button" role="tab" aria-selected="false" data-fulfillment-tab="pickup">Pickup</button>
+        </div>
         <div id="ordersTable" class="table-shell large"></div>
       </div>
     </section>

@@ -16,6 +16,8 @@ const orderSchema = new mongoose.Schema({
   orderId: { type: String, unique: true, index: true },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
   customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: false, index: true },
+  subscriptionStartDate: { type: Date, default: null, index: true },
+  subscriptionEndDate: { type: Date, default: null, index: true },
   items: { type: [itemSchema], default: [] },
   fulfillment: { type: String, enum: ['pickup', 'delivery', 'mixed'], default: 'pickup' },
   type: { type: String, enum: ['product', 'tiffin', 'catering', 'custom'], default: 'product' },
@@ -35,6 +37,11 @@ const orderSchema = new mongoose.Schema({
   status: { type: String, enum: ORDER_STATUSES, default: 'pending' },
   isDemo: { type: Boolean, default: false }
 }, { timestamps: true });
+
+orderSchema.index(
+  { customer: 1, type: 1, 'tiffinPlan.packageType': 1, 'tiffinPlan.size': 1, subscriptionStartDate: 1 },
+  { unique: true, sparse: true, partialFilterExpression: { type: 'tiffin' } }
+);
 
 orderSchema.pre('validate', function (next) {
   if (!this.orderId) {

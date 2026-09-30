@@ -24,6 +24,104 @@ function basePipeline(query = {}) {
   return pipe;
 }
 
+function approvedPickupItemExpression(itemRef = '$$item') {
+  const items = { $ifNull: ['$items', []] };
+  const hasDeliveryItems = {
+    $in: ['delivery', { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.fulfillment', 'pickup'] } } }]
+  };
+  return {
+    $and: [
+      { $eq: [{ $ifNull: [`${itemRef}.fulfillment`, 'pickup'] }, 'pickup'] },
+      {
+        $or: [
+          { $eq: [`${itemRef}.deliveryStatus`, 'ACCEPTED'] },
+          {
+            $and: [
+              { $eq: [{ $ifNull: [`${itemRef}.deliveryStatus`, null] }, null] },
+              { $eq: [hasDeliveryItems, false] },
+              { $in: ['$status', REVENUE_STATUSES] }
+            ]
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function approvedPickupItemsExpression() {
+  return {
+    $filter: {
+      input: { $ifNull: ['$items', []] },
+      as: 'item',
+      cond: approvedPickupItemExpression()
+    }
+  };
+}
+
+function revenueExpression() {
+  const items = { $ifNull: ['$items', []] };
+  const deliveryItems = {
+    $filter: {
+      input: items,
+      as: 'item',
+      cond: { $eq: [{ $ifNull: ['$$item.fulfillment', 'pickup'] }, 'delivery'] }
+    }
+  };
+  const pickupItems = approvedPickupItemsExpression();
+  const allItemTotal = { $sum: { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
+  const deliveryItemTotal = { $sum: { $map: { input: deliveryItems, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
+  const pickupItemTotal = { $sum: { $map: { input: pickupItems, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
+  const hasPickupItems = { $in: ['pickup', { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.fulfillment', 'pickup'] } } }] };
+  const hasDeliveryItems = { $in: ['delivery', { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.fulfillment', 'pickup'] } } }] };
+  const extraAmount = { $max: [0, { $subtract: [{ $ifNull: ['$totalAmount', 0] }, allItemTotal] }] };
+  const deliveryRevenue = {
+    $cond: [
+      { $in: ['$status', REVENUE_STATUSES] },
+      {
+        $cond: [
+          { $eq: [{ $size: items }, 0] },
+          '$totalAmount',
+          {
+            $add: [
+              deliveryItemTotal,
+              { $cond: [hasDeliveryItems, extraAmount, 0] }
+            ]
+          }
+        ]
+      },
+      0
+    ]
+  };
+  const pickupRevenue = {
+    $add: [
+      pickupItemTotal,
+      { $cond: [{ $and: [hasPickupItems, { $eq: [hasDeliveryItems, false] }, { $gt: [{ $size: pickupItems }, 0] }] }, extraAmount, 0] }
+    ]
+  };
+  return { $add: [deliveryRevenue, pickupRevenue] };
+}
+
+function revenueEligibleItemsExpression() {
+  const items = { $ifNull: ['$items', []] };
+  return {
+    $filter: {
+      input: items,
+      as: 'item',
+      cond: {
+        $or: [
+          approvedPickupItemExpression(),
+          {
+            $and: [
+              { $eq: [{ $ifNull: ['$$item.fulfillment', 'pickup'] }, 'delivery'] },
+              { $not: [{ $in: ['$status', ['CANCELLED', 'cancelled']] }] }
+            ]
+          }
+        ]
+      }
+    }
+  };
+}
+
 async function overview(req, res) {
   const pipe = basePipeline(req.query);
   const [agg] = await Order.aggregate([
@@ -32,7 +130,7 @@ async function overview(req, res) {
       $group: {
         _id: null,
         totalOrders: { $sum: 1 },
-        totalRevenue: { $sum: { $cond: [{ $in: ['$status', REVENUE_STATUSES] }, '$totalAmount', 0] } },
+        totalRevenue: { $sum: revenueExpression() },
         pending: { $sum: { $cond: [{ $in: ['$status', ['PENDING', 'pending']] }, 1, 0] } },
         confirmed: { $sum: { $cond: [{ $in: ['$status', ['ACCEPTED', 'confirmed']] }, 1, 0] } },
         delivered: { $sum: { $cond: [{ $in: ['$status', ['DELIVERED', 'delivered']] }, 1, 0] } },
@@ -106,7 +204,7 @@ async function revenue(req, res) {
     {
       $group: {
         _id: { $dateToString: { format, date: '$createdAt' } },
-        revenue: { $sum: { $cond: [{ $in: ['$status', REVENUE_STATUSES] }, '$totalAmount', 0] } },
+        revenue: { $sum: revenueExpression() },
         orders: { $sum: 1 }
       }
     },
@@ -123,7 +221,7 @@ async function revenue(req, res) {
 async function products(req, res) {
   const rows = await Order.aggregate([
     ...basePipeline(req.query),
-    { $match: { status: { $nin: ['CANCELLED', 'cancelled'] } } },
+    { $set: { items: revenueEligibleItemsExpression() } },
     { $unwind: '$items' },
     {
       $group: {
@@ -162,7 +260,7 @@ async function products(req, res) {
 async function categories(req, res) {
   const rows = await Order.aggregate([
     ...basePipeline(req.query),
-    { $match: { status: { $nin: ['CANCELLED', 'cancelled'] } } },
+    { $set: { items: revenueEligibleItemsExpression() } },
     { $unwind: '$items' },
     {
       $group: {
@@ -195,7 +293,7 @@ async function customers(req, res) {
       $group: {
         _id: { $ifNull: ['$customerDoc.area', 'Unknown'] },
         orders: { $sum: 1 },
-        revenue: { $sum: { $cond: [{ $in: ['$status', REVENUE_STATUSES] }, '$totalAmount', 0] } }
+        revenue: { $sum: revenueExpression() }
       }
     },
     { $sort: { orders: -1 } }
@@ -207,7 +305,7 @@ async function customers(req, res) {
       $group: {
         _id: '$customer',
         orders: { $sum: 1 },
-        revenue: { $sum: { $cond: [{ $in: ['$status', REVENUE_STATUSES] }, '$totalAmount', 0] } },
+        revenue: { $sum: revenueExpression() },
         firstName: { $last: '$customerDoc.firstName' },
         lastName: { $last: '$customerDoc.lastName' },
         area: { $last: '$customerDoc.area' }
@@ -310,7 +408,7 @@ async function customOrders(req, res) {
         confirmed: { $sum: { $cond: [{ $in: ['$status', ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'confirmed', 'preparing', 'ready', 'delivered']] }, 1, 0] } },
         cancelled: { $sum: { $cond: [{ $in: ['$status', ['CANCELLED', 'cancelled']] }, 1, 0] } },
         totalAmount: { $sum: '$totalAmount' },
-        revenue: { $sum: { $cond: [{ $in: ['$status', REVENUE_STATUSES] }, '$totalAmount', 0] } }
+        revenue: { $sum: revenueExpression() }
       }
     }
   ]);

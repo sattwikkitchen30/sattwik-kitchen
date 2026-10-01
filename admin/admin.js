@@ -168,11 +168,11 @@ function toDateOnly(dateValue) {
 function getTiffinRowState(endDate) {
   const finalEnd = toDateOnly(endDate);
   const today = toDateOnly(new Date());
-  if (!finalEnd || !today) return { className: '', label: '' };
-  const diff = Math.ceil((finalEnd - today) / (1000 * 60 * 60 * 24));
-  if (diff < 0) return { className: 'row-expired', label: 'Subscription plan ended' };
-  if (diff <= 3) return { className: 'row-warning', label: 'Ends soon' };
-  return { className: '', label: '' };
+  if (!finalEnd || !today) return '';
+  const diff = Math.round((finalEnd - today) / (1000 * 60 * 60 * 24));
+  if (diff < 0) return 'row-expired';
+  if (diff <= 3) return 'row-warning';
+  return '';
 }
 
 function parseFilters() {
@@ -507,7 +507,7 @@ async function renderOrdersTable() {
   const orders = data.orders || [];
   const table = document.getElementById('ordersTable');
   const headers = state.ordersFulfillment === 'delivery'
-    ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Start Date', 'End Date', 'Delivery Member', 'Amount']
+    ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Start Date', 'End Date', 'Delivery Member', 'Amount', 'Status']
     : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Status', 'Section total'];
 
   table.innerHTML = `
@@ -532,24 +532,24 @@ async function renderOrdersTable() {
                 ? `${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'} Package`
                 : 'Tiffin Plan'
             );
-            const startDate = order.subscriptionStartDate || order.createdAt;
+            const tiffinStatus = String(order.status || 'PENDING').toUpperCase();
+            const startDate = tiffinStatus === 'PENDING' ? null : order.subscriptionStartDate;
             const endDate = order.subscriptionEndDate || order.createdAt;
-            const rowState = getTiffinRowState(endDate);
+            const rowState = getTiffinRowState(order.subscriptionEndDate);
             const amount = currency(order.totalAmount || (order.tiffinPlan?.price || 0));
             return `
-              <tr class="${rowState.className}" data-order-id="${order._id}">
+              <tr class="${rowState}" data-order-id="${order._id}">
                 <td>${order.orderId}</td>
                 <td><strong>${customerName}</strong></td>
                 <td>${customer.phone || '—'}<br>${customer.email || '—'}</td>
                 <td>${itemName}</td>
                 <td>${order.type}</td>
-                <td>${dateLabel(startDate)}</td>
+                <td>${startDate ? dateLabel(startDate) : '—'}</td>
                 <td>
                   <div class="tiffin-end-date-cell">
                     <input type="date" class="tiffin-end-date-input" data-order-id="${order._id}" value="${getLocalDateString(endDate)}" />
                     <button class="tiffin-end-date-save" data-order-id="${order._id}">Save</button>
                   </div>
-                  ${rowState.label ? `<div class="tiffin-row-state">${rowState.label}</div>` : ''}
                 </td>
                 <td>
                   <select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
@@ -558,6 +558,11 @@ async function renderOrdersTable() {
                   </select>
                 </td>
                 <td>${amount}</td>
+                <td>
+                  <select class="tiffin-status-select order-status-select" data-order-id="${order._id}" data-current-status="${tiffinStatus}">
+                    ${['PENDING', 'ACCEPTED', 'DELIVERED'].map((status) => `<option value="${status}" ${tiffinStatus === status ? 'selected' : ''}>${status}</option>`).join('')}
+                  </select>
+                </td>
               </tr>
             `;
           }
@@ -611,6 +616,20 @@ async function renderOrdersTable() {
     } catch (error) {
       select.value = previous;
       alert(error.message || 'Status update failed');
+    }
+  }));
+  table.querySelectorAll('.delivery-member-select').forEach((select) => select.addEventListener('change', async () => {
+    const previous = select.dataset.currentMember;
+    if (!select.value) {
+      select.value = previous;
+      return;
+    }
+    try {
+      await api(`/orders/${select.dataset.orderId}/assign`, { method: 'PUT', body: JSON.stringify({ deliveryMemberId: select.value }) });
+      await loadDashboardData();
+    } catch (error) {
+      select.value = previous;
+      alert(error.message || 'Assignment failed');
     }
   }));
   table.querySelectorAll('.pickup-status-select').forEach((select) => select.addEventListener('change', async () => {

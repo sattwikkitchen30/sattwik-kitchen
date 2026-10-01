@@ -336,10 +336,16 @@ th {
 .badge.delivered { background: #dff3ec; color: #0f5e46; }
 .badge.cancelled { background: #fbe8e8; color: #8e322d; }
 .row-warning {
-  background: rgba(200, 155, 84, 0.08);
+  background: #fff1a8;
 }
 .row-expired {
-  background: rgba(201, 95, 87, 0.08);
+  background: #f4c7c3;
+}
+#ordersTable tbody tr.row-warning > td {
+  background: #fff1a8;
+}
+#ordersTable tbody tr.row-expired > td {
+  background: #f4c7c3;
 }
 .tiffin-end-date-cell {
   display: flex;
@@ -354,12 +360,6 @@ th {
   background: white;
   color: var(--ink);
   font-size: 11px;
-}
-.tiffin-row-state {
-  margin-top: 6px;
-  font-size: 10px;
-  font-weight: 800;
-  color: var(--muted);
 }
 .tiffin-end-date-save {
   border: 0;

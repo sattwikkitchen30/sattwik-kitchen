@@ -55,6 +55,22 @@ async function syncTiffinSubscriptionStatus(order) {
   await TiffinSubscription.updateMany({ orderId: order._id }, { $set: { status } });
 }
 
+async function syncTiffinSubscriptionDates(order) {
+  if (!order || order.type !== 'tiffin') return;
+  await TiffinSubscription.updateOne(
+    { orderId: order._id },
+    { $set: { startDate: order.subscriptionStartDate, endDate: order.subscriptionEndDate } }
+  );
+}
+
+function setTiffinAcceptanceDates(order) {
+  const acceptedAt = new Date();
+  const { startDate, endDate } = getSubscriptionServiceDates(acceptedAt);
+  order.acceptedAt = acceptedAt;
+  order.subscriptionStartDate = startDate;
+  order.subscriptionEndDate = endDate;
+}
+
 async function createOrder(req, res) {
   if (!req.customer || !req.customer._id) {
     return res.status(401).json({ message: 'Customer sign-in required before placing an order.' });
@@ -438,6 +454,24 @@ async function updateStatus(req, res) {
   if (!isDeliveryOrder && ['OUT_FOR_DELIVERY', 'DELIVERED'].includes(status)) {
     return res.status(400).json({ message: 'Pickup-only orders cannot move into delivery workflow.' });
   }
+  if (order.type === 'tiffin' && isDeliveryOrder) {
+    const currentStatus = String(order.status || '').toUpperCase();
+    const isAcceptance = currentStatus === 'PENDING' && status === 'ACCEPTED';
+    const isDeliveryCompletion = currentStatus === 'ACCEPTED' && status === 'DELIVERED';
+    if (!isAcceptance && !isDeliveryCompletion) {
+      return res.status(400).json({ message: `Invalid tiffin delivery transition from ${currentStatus} to ${status}.` });
+    }
+    if (isAcceptance) setTiffinAcceptanceDates(order);
+    order.status = status;
+    deliveryItems.forEach((item) => { item.deliveryStatus = status; });
+    if (status === 'DELIVERED') order.deliveredAt = new Date();
+    await order.save();
+    if (isAcceptance) await syncTiffinSubscriptionDates(order);
+    await syncTiffinSubscriptionStatus(order);
+    const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
+    emitOrderUpdate(req.app, populated);
+    return res.json({ message: `Order marked as ${status}`, order: populated });
+  }
   if (DELIVERY_STATUSES.includes(order.status) || DELIVERY_STATUSES.includes(status)) {
     if (STATUS_TRANSITIONS[order.status] !== status) return res.status(400).json({ message: `Invalid transition from ${order.status} to ${status}.` });
     if (status === 'ACCEPTED') order.acceptedAt = new Date();
@@ -478,12 +512,15 @@ async function assignDeliveryMember(req, res) {
   }
 
   order.deliveryMemberId = deliveryMemberId;
+  const acceptingTiffin = order.type === 'tiffin' && (['PENDING', 'pending'].includes(order.status) || !order.status);
   if (['PENDING', 'pending'].includes(order.status) || !order.status) {
     order.status = 'ACCEPTED';
-    order.acceptedAt = new Date();
+    if (acceptingTiffin) setTiffinAcceptanceDates(order);
+    else order.acceptedAt = new Date();
   }
   deliveryItems.forEach((item) => { item.deliveryStatus = order.status; });
   await order.save();
+  if (acceptingTiffin) await syncTiffinSubscriptionDates(order);
   
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
   emitOrderUpdate(req.app, populated);

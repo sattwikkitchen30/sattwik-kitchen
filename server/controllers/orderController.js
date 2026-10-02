@@ -277,6 +277,88 @@ async function createOrder(req, res) {
   res.status(201).json({ message: 'Order saved', order: populated });
 }
 
+async function createManualOrder(req, res) {
+  const { firstName, lastName, phone, email, productId, quantity, amount, fulfillment, address = '' } = req.body || {};
+  const cleanFirstName = String(firstName || '').trim();
+  const cleanLastName = String(lastName || '').trim();
+  const cleanPhone = String(phone || '').trim();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const cleanFulfillment = String(fulfillment || '').toLowerCase();
+  const parsedQuantity = Number(quantity);
+  const parsedAmount = Number(amount);
+
+  if (!cleanFirstName || !cleanLastName || !cleanPhone || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    return res.status(400).json({ message: 'First name, last name, phone and a valid email are required.' });
+  }
+  if (!mongoose.isValidObjectId(productId)) return res.status(400).json({ message: 'Select a valid product.' });
+  if (!Number.isInteger(parsedQuantity) || parsedQuantity < 1 || parsedQuantity > 99) {
+    return res.status(400).json({ message: 'Quantity must be between 1 and 99.' });
+  }
+  if (!Number.isFinite(parsedAmount) || parsedAmount < 0) return res.status(400).json({ message: 'Enter a valid non-negative amount.' });
+  if (!['delivery', 'pickup'].includes(cleanFulfillment)) {
+    return res.status(400).json({ message: 'Fulfillment must be delivery or pickup.' });
+  }
+
+  const product = await Product.findOne({ _id: productId, active: true }).lean();
+  if (!product) return res.status(400).json({ message: 'Select an active catalog product.' });
+  if (product.stock < parsedQuantity) {
+    return res.status(400).json({ message: `Insufficient stock for ${product.name}. Available: ${product.stock}, requested: ${parsedQuantity}.` });
+  }
+
+  let customer;
+  try {
+    customer = await Customer.findOneAndUpdate(
+      { email: cleanEmail, phone: cleanPhone },
+      { $setOnInsert: { firstName: cleanFirstName, lastName: cleanLastName, phone: cleanPhone, email: cleanEmail, address: String(address).trim() } },
+      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+    );
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    customer = await Customer.findOne({ email: cleanEmail, phone: cleanPhone });
+    if (!customer) throw error;
+  }
+
+  const updatedProduct = await Product.findOneAndUpdate(
+    { _id: product._id, active: true, stock: { $gte: parsedQuantity } },
+    { $inc: { stock: -parsedQuantity } },
+    { new: true }
+  ).lean();
+  if (!updatedProduct) return res.status(400).json({ message: `Insufficient stock for ${product.name}.` });
+
+  const roundedAmount = Math.round(parsedAmount * 100) / 100;
+  let order;
+  try {
+    order = await Order.create({
+      customer: customer._id,
+      customerId: customer._id,
+      items: [{
+        productId: product._id,
+        productName: product.name,
+        category: product.category,
+        fulfillment: cleanFulfillment,
+        deliveryStatus: 'PENDING',
+        priceAtPurchase: Math.round((roundedAmount / parsedQuantity) * 100) / 100,
+        quantity: parsedQuantity,
+        subtotal: roundedAmount
+      }],
+      fulfillment: cleanFulfillment,
+      type: 'product',
+      totalAmount: roundedAmount,
+      deliveryAddress: String(address || customer.address || customer.area || '').trim(),
+      status: 'PENDING',
+      placedAt: new Date()
+    });
+  } catch (error) {
+    await Product.updateOne({ _id: product._id }, { $inc: { stock: parsedQuantity } });
+    throw error;
+  }
+
+  req.app.get('io')?.emit('product:stockUpdated', { productId: updatedProduct._id, stock: updatedProduct.stock, product: updatedProduct });
+  const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
+  emitOrderUpdate(req.app, populated);
+  return res.status(201).json({ message: 'Manual order saved', order: populated });
+}
+
 async function listOrders(req, res) {
   const { status, type, area, search, sort = '-createdAt', page = 1, limit = 50, from, to, fulfillment } = req.query;
   const fulfillmentFilter = String(fulfillment || '').toLowerCase();
@@ -562,4 +644,4 @@ async function deleteOrder(req, res) {
   res.json({ message: 'Order deleted' });
 }
 
-module.exports = { createOrder, listOrders, getOrder, updateStatus, deleteOrder, assignDeliveryMember, updateTiffinEndDate };
+module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateStatus, deleteOrder, assignDeliveryMember, updateTiffinEndDate };

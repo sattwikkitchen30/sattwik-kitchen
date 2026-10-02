@@ -569,16 +569,27 @@ async function renderOrdersTable() {
 
           const itemDetails = items.map((it) => `${it.productName} × ${it.quantity} — ${currency(it.priceAtPurchase)} each; ${currency(it.subtotal)} (${it.fulfillment === 'delivery' ? 'Delivery' : 'Pickup'})`).join('<br>');
           const orderDetails = [itemDetails, order.customRequest ? `Custom request: ${order.customRequest}` : ''].filter(Boolean).join('<br>') || '—';
-          const deliveryAddress = state.ordersFulfillment === 'delivery' ? `<br><strong>Address:</strong> ${order.deliveryAddress || customer.address || customer.area || '—'}` : '<br><strong>Pickup:</strong> Customer pickup';
+          const deliveryAddress = state.ordersFulfillment === 'delivery' ? `<br><strong>Address:</strong> ${escHtml(order.deliveryAddress || customer.address || customer.area || '—')}` : '<br><strong>Pickup:</strong> Customer pickup';
+          const escapedCustomerName = escHtml(customerName);
+          const escapedPhone = escHtml(customer.phone || '—');
+          const escapedEmail = escHtml(customer.email || '—');
           const orderDateTime = new Date(order.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+          const deliveryAssignment = state.ordersFulfillment === 'delivery' ? `
+            <td><select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
+              <option value="">Unassigned</option>
+              ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${escHtml(member.name)}</option>`).join('')}
+            </select></td>` : '';
           return `
           <tr>
             <td>${order.orderId}</td>
-            <td><strong>${customerName}</strong><br>${customer.phone || '—'}<br>${customer.email || '—'}${deliveryAddress}</td>
+            ${state.ordersFulfillment === 'delivery'
+              ? `<td><strong>${escapedCustomerName}</strong></td><td>${escapedPhone}<br>${escapedEmail}${deliveryAddress}</td>`
+              : `<td><strong>${escapedCustomerName}</strong><br>${escapedPhone}<br>${escapedEmail}${deliveryAddress}</td>`}
             <td>${orderDetails}</td>
             <td>${order.type}</td>
-            <td>${state.ordersFulfillment === 'delivery' ? 'Delivery' : 'Pickup'}</td>
-            <td>${orderDateTime}</td>
+            ${state.ordersFulfillment === 'delivery'
+              ? `<td>—</td><td>—</td>${deliveryAssignment}<td>${currency(order.totalAmount)}</td>`
+              : `<td>Pickup</td><td>${orderDateTime}</td>`}
             <td>
               ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}">
                 ${['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].map((status) => `<option value="${status}" ${order.status === status ? 'selected' : ''}>${status.replaceAll('_', ' ')}</option>`).join('')}
@@ -588,10 +599,10 @@ async function renderOrdersTable() {
                 <option value="CANCELLED">CANCELLED</option>
               </select>` : `<span class="badge ${String(pickupStatus).toLowerCase()}">${pickupStatus}</span>`}
             </td>
-            <td>${currency(order.totalAmount)}</td>
+            ${state.ordersFulfillment === 'pickup' ? `<td>${currency(order.totalAmount)}</td>` : ''}
           </tr>
         `;
-        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 9 : 8}">No ${state.ordersFulfillment} orders found.</td></tr>`}
+        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 10 : 8}">No ${state.ordersFulfillment} orders found.</td></tr>`}
       </tbody>
     </table>
   `;
@@ -657,6 +668,93 @@ async function renderOrdersTable() {
     }
   }));
 }
+
+const manualOrderModal = document.getElementById('manualOrderModal');
+const manualOrderForm = document.getElementById('manualOrderForm');
+let manualOrderProducts = [];
+
+function closeManualOrderModal() {
+  if (!manualOrderModal || !manualOrderForm) return;
+  manualOrderModal.hidden = true;
+  manualOrderModal.setAttribute('aria-hidden', 'true');
+  manualOrderForm.reset();
+  document.getElementById('manualOrderMessage').textContent = '';
+}
+
+document.getElementById('addManualOrderBtn')?.addEventListener('click', async () => {
+  const fulfillment = state.ordersFulfillment || 'delivery';
+  document.getElementById('manualOrderTitle').textContent = `Add ${fulfillment === 'delivery' ? 'Delivery' : 'Pickup'} Order`;
+  document.getElementById('manualOrderFulfillment').textContent = `${fulfillment === 'delivery' ? 'Delivery' : 'Pickup'} order`;
+  document.getElementById('manualAddressLabel').hidden = fulfillment !== 'delivery';
+  try {
+    const data = await api('/products/all');
+    manualOrderProducts = (data.products || []).filter((product) => product.active !== false);
+    const select = document.getElementById('manualProduct');
+    select.innerHTML = '<option value="">Select a product</option>' + manualOrderProducts.map((product) =>
+      `<option value="${product._id}" ${product.stock === 0 ? 'disabled' : ''}>${escHtml(product.name)} (${currency(product.price)}${product.stock === 0 ? ', out of stock' : ''})</option>`
+    ).join('');
+    document.getElementById('manualAmount').value = '';
+    document.getElementById('manualOrderMessage').textContent = '';
+    manualOrderModal.hidden = false;
+    manualOrderModal.setAttribute('aria-hidden', 'false');
+    document.getElementById('manualFirstName').focus();
+  } catch (error) {
+    alert(error.message || 'Could not load products.');
+  }
+});
+
+function updateManualOrderAmount() {
+  const product = manualOrderProducts.find((item) => String(item._id) === document.getElementById('manualProduct').value);
+  const quantity = Number(document.getElementById('manualQuantity').value) || 1;
+  document.getElementById('manualAmount').value = product ? (Number(product.price) * quantity).toFixed(2) : '';
+}
+
+document.getElementById('manualProduct')?.addEventListener('change', updateManualOrderAmount);
+document.getElementById('manualQuantity')?.addEventListener('input', updateManualOrderAmount);
+document.getElementById('manualOrderCloseBtn')?.addEventListener('click', closeManualOrderModal);
+document.getElementById('manualOrderCancelBtn')?.addEventListener('click', closeManualOrderModal);
+manualOrderModal?.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) closeManualOrderModal();
+});
+
+manualOrderForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submitButton = document.getElementById('manualOrderSubmit');
+  const message = document.getElementById('manualOrderMessage');
+  const productId = document.getElementById('manualProduct').value;
+  const product = manualOrderProducts.find((item) => String(item._id) === productId);
+  const quantity = Number(document.getElementById('manualQuantity').value);
+  const amount = Number(document.getElementById('manualAmount').value);
+  if (!product || !Number.isInteger(quantity) || quantity < 1 || quantity > 99 || !Number.isFinite(amount) || amount < 0) {
+    message.textContent = 'Choose a product and enter a valid quantity and amount.';
+    return;
+  }
+
+  submitButton.disabled = true;
+  message.textContent = 'Creating order...';
+  try {
+    await api('/orders/manual', {
+      method: 'POST',
+      body: JSON.stringify({
+        firstName: document.getElementById('manualFirstName').value.trim(),
+        lastName: document.getElementById('manualLastName').value.trim(),
+        phone: document.getElementById('manualPhone').value.trim(),
+        email: document.getElementById('manualEmail').value.trim(),
+        productId,
+        quantity,
+        amount,
+        fulfillment: state.ordersFulfillment || 'delivery',
+        address: document.getElementById('manualAddress').value.trim()
+      })
+    });
+    closeManualOrderModal();
+    await loadDashboardData();
+  } catch (error) {
+    message.textContent = error.message || 'Could not create order.';
+  } finally {
+    submitButton.disabled = false;
+  }
+});
 
 async function renderProductsTable() {
   const data = await api('/products/all');
@@ -887,6 +985,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeEditModal();
     closeAddModal();
+    closeManualOrderModal();
   }
 });
 

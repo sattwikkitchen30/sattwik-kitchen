@@ -43,12 +43,29 @@ orderSchema.index(
   { unique: true, sparse: true, partialFilterExpression: { type: 'tiffin' } }
 );
 
-orderSchema.pre('validate', function (next) {
+orderSchema.pre('validate', async function () {
   if (!this.orderId) {
-    const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
-    this.orderId = 'SK-' + rand;
+    const date = this.placedAt || this.createdAt || new Date();
+    const dayKey = `${String(date.getUTCFullYear()).slice(-2)}${String(date.getUTCMonth() + 1).padStart(2, '0')}${String(date.getUTCDate()).padStart(2, '0')}`;
+    const OrderCounter = require('./OrderCounter');
+    let counter;
+    try {
+      counter = await OrderCounter.findOneAndUpdate(
+        { _id: dayKey },
+        { $inc: { sequence: 1 } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      counter = await OrderCounter.findOneAndUpdate(
+        { _id: dayKey },
+        { $inc: { sequence: 1 } },
+        { new: true }
+      );
+    }
+    if (counter.sequence > 99999) throw new Error(`Daily order sequence exhausted for ${dayKey}.`);
+    this.orderId = `${dayKey}${String(counter.sequence).padStart(5, '0')}`;
   }
-  next();
 });
 
 module.exports = mongoose.model('Order', orderSchema);

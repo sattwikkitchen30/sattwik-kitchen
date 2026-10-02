@@ -4,6 +4,7 @@ const { authRequired } = require('../middleware/auth');
 const { customerAuthRequired } = require('../middleware/customerAuth');
 
 router.post('/', customerAuthRequired, c.createOrder);
+router.post('/manual', authRequired, c.createManualOrder);
 router.get('/', authRequired, c.listOrders);
 router.get('/:id', authRequired, c.getOrder);
 router.put('/:id/status', authRequired, c.updateStatus);

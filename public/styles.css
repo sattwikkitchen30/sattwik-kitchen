@@ -987,6 +987,7 @@ a {
 .footer-bottom {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 20px;
   border-top: 1px solid rgba(255,255,255,.12);
   margin-top: 46px;
@@ -994,6 +995,8 @@ a {
   font-size: 11px;
   color: whitesmoke;
 }
+.footer-bottom-brand { display: grid; gap: 5px; }
+.footer-bottom > span a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 
 .whatsapp-float {
   position: fixed;

@@ -110,7 +110,7 @@
 
     <section id="ordersView" class="view-panel">
       <div class="panel card">
-        <div class="panel-head"><h3>Orders</h3><button id="exportOrdersBtn" class="btn btn-secondary">Export CSV</button></div>
+        <div class="panel-head"><h3>Orders</h3><div class="orders-actions"><button id="addManualOrderBtn" class="btn btn-primary" type="button">+ Add Order</button><button id="exportOrdersBtn" class="btn btn-secondary">Export CSV</button></div></div>
         <div class="orders-tabs" role="tablist" aria-label="Order fulfillment">
           <button class="orders-tab active" type="button" role="tab" aria-selected="true" data-fulfillment-tab="delivery">Delivery</button>
           <button class="orders-tab" type="button" role="tab" aria-selected="false" data-fulfillment-tab="pickup">Pickup</button>
@@ -345,6 +345,31 @@
           <button type="button" class="btn btn-secondary" id="addCancelBtn">Cancel</button>
         </div>
         <p id="addFormMessage" class="form-message" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+
+  <div id="manualOrderModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="manualOrderTitle" hidden>
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h3 id="manualOrderTitle">Add Delivery Order</h3>
+        <button type="button" class="modal-close" id="manualOrderCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <form id="manualOrderForm" class="stacked-form" novalidate>
+        <label>Customer First Name<input id="manualFirstName" type="text" required autocomplete="given-name" /></label>
+        <label>Customer Last Name<input id="manualLastName" type="text" required autocomplete="family-name" /></label>
+        <label>Phone<input id="manualPhone" type="tel" required autocomplete="tel" /></label>
+        <label>Email<input id="manualEmail" type="email" required autocomplete="email" /></label>
+        <label>Product<select id="manualProduct" required><option value="">Select a product</option></select></label>
+        <label>Quantity<input id="manualQuantity" type="number" min="1" max="99" step="1" value="1" required /></label>
+        <label>Amount ($)<input id="manualAmount" type="number" min="0" step="0.01" required /></label>
+        <label id="manualAddressLabel">Delivery Address (optional)<input id="manualAddress" type="text" autocomplete="street-address" /></label>
+        <p id="manualOrderFulfillment" class="manual-order-fulfillment">Delivery order</p>
+        <div class="manual-order-actions">
+          <button type="submit" class="btn btn-primary" id="manualOrderSubmit">Create order</button>
+          <button type="button" class="btn btn-secondary" id="manualOrderCancelBtn">Cancel</button>
+        </div>
+        <p id="manualOrderMessage" class="form-message" aria-live="polite"></p>
       </form>
     </div>
   </div>

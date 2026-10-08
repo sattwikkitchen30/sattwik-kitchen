@@ -3,20 +3,22 @@ const Order = require('../models/Order');
 const { deliveryAuthRequired } = require('../middleware/deliveryAuth');
 const { STATUS_TRANSITIONS } = require('../utils/constants');
 const { emitOrderUpdate } = require('../utils/orderEvents');
+const { getOrderServiceDates, getCurrentServiceDate, resolveDeliveryStatus, applyDeliveryStatus, withCurrentDeliveryStatus } = require('../utils/deliveryStatus');
 
 router.get('/', deliveryAuthRequired, async (req, res) => {
   // Only show orders assigned to this delivery member
   const orders = await Order.find({
     deliveryMemberId: req.deliveryMember._id,
-    status: { $in: ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'] },
+    status: { $in: ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'] },
     'items.fulfillment': 'delivery'
   }).populate('customer', 'firstName lastName phone email address area').lean();
 
   const deliveryOrders = orders.map((order) => {
     const items = (order.items || []).filter((item) => item.fulfillment === 'delivery');
+    const currentOrder = withCurrentDeliveryStatus({ ...order, items });
     return {
-      ...order,
-      items,
+      ...currentOrder,
+      items: currentOrder.items,
       totalAmount: items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
     };
   });
@@ -36,20 +38,23 @@ router.put('/:id/status', deliveryAuthRequired, async (req, res) => {
     return res.status(400).json({ message: 'Invalid delivery status. Delivery members can only update to OUT_FOR_DELIVERY or DELIVERED.' });
   }
 
-  const currentStatus = requested === 'OUT_FOR_DELIVERY' ? 'ACCEPTED' : 'OUT_FOR_DELIVERY';
-  const order = await Order.findOneAndUpdate(
-    { _id: req.params.id, status: currentStatus, deliveryMemberId: req.deliveryMember._id, 'items.fulfillment': 'delivery' },
-    {
-      $set: {
-        status: requested,
-        ...(requested === 'OUT_FOR_DELIVERY' ? { outForDeliveryAt: new Date() } : { deliveredAt: new Date() }),
-        'items.$[deliveryItem].deliveryStatus': requested
-      }
-    },
-    { new: true, runValidators: true, arrayFilters: [{ 'deliveryItem.fulfillment': 'delivery' }] }
-  );
-  
-  if (!order) return res.status(409).json({ message: 'Order status or assignment has changed. Refresh the dashboard.' });
+  const order = await Order.findById(req.params.id);
+  if (!order || String(order.deliveryMemberId) !== String(req.deliveryMember._id)
+    || !(order.items || []).some((item) => item.fulfillment === 'delivery')) {
+    return res.status(409).json({ message: 'Order status or assignment has changed. Refresh the dashboard.' });
+  }
+  if (getOrderServiceDates(order).length && !getCurrentServiceDate(order)) {
+    return res.status(400).json({ message: 'No delivery service is scheduled for today.' });
+  }
+
+  const currentStatus = resolveDeliveryStatus(order);
+  if (STATUS_TRANSITIONS[currentStatus] !== requested) {
+    return res.status(409).json({ message: 'Order status or assignment has changed. Refresh the dashboard.' });
+  }
+  applyDeliveryStatus(order, requested);
+  if (requested === 'OUT_FOR_DELIVERY') order.outForDeliveryAt = new Date();
+  else order.deliveredAt = new Date();
+  await order.save();
 
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email').lean();
   emitOrderUpdate(req.app, populated);

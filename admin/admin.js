@@ -1,6 +1,9 @@
 const API_PREFIX = '/api';
 let token = localStorage.getItem('sattwikToken') || '';
 let state = { overview: null, orders: [], products: [], customers: [], custom: null, ordersFulfillment: 'delivery' };
+let tiffinEditorOrder = null;
+let tiffinEditorItems = [];
+let tiffinEditorProducts = [];
 
 const loginForm = document.getElementById('loginForm');
 const loginMessage = document.getElementById('loginMessage');
@@ -13,6 +16,20 @@ function setMessage(element, text, isSuccess = false) {
   if (!element) return;
   element.textContent = text;
   element.classList.toggle('success', Boolean(isSuccess));
+}
+
+let adminDateSaveToastTimer;
+function showAdminToast(message) {
+  const toast = document.getElementById('adminDateSaveToast');
+  if (!toast) return;
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(adminDateSaveToastTimer);
+  adminDateSaveToastTimer = setTimeout(() => { toast.hidden = true; }, 3000);
+}
+
+function showAdminDateSaveToast() {
+  showAdminToast('Changes saved successfully.');
 }
 
 function getAuthHeaders() {
@@ -92,6 +109,15 @@ if (loginForm) {
 
 if (window.location.pathname.endsWith('/dashboard.html')) {
   loadProfile();
+  const scheduleServiceDayRefresh = () => {
+    const nextMidnight = new Date();
+    nextMidnight.setHours(24, 0, 0, 50);
+    window.setTimeout(() => {
+      if (state.ordersFulfillment === 'delivery') renderOrdersTable();
+      scheduleServiceDayRefresh();
+    }, nextMidnight.getTime() - Date.now());
+  };
+  scheduleServiceDayRefresh();
 
   const navButtons = document.querySelectorAll('.nav-item');
   const views = document.querySelectorAll('.view-panel');
@@ -147,8 +173,36 @@ function currency(value) {
 function pickupStatusForOrder(order, items) {
   const rawStatus = String(items.find((item) => item.fulfillment === 'pickup')?.deliveryStatus || (order.fulfillment === 'pickup' ? order.status : 'PENDING')).toUpperCase();
   if (rawStatus === 'CANCELLED') return 'CANCELLED';
-  if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY', 'DELIVERED', 'OUT_FOR_DELIVERY'].includes(rawStatus)) return 'ACCEPTED';
+  if (rawStatus === 'DELIVERED') return 'DELIVERED';
+  if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY'].includes(rawStatus)) return 'ACCEPTED';
   return 'PENDING';
+}
+
+function pickupStatusLabel(status) {
+  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', DELIVERED: 'Pickup Completed', CANCELLED: 'Cancelled' })[status] || status;
+}
+
+function deliveryStatusLabel(status) {
+  return ({
+    PENDING: 'Pending',
+    ACCEPTED: 'Accepted',
+    OUT_FOR_DELIVERY: 'Out for Delivery',
+    DELIVERED: 'Delivered',
+    CANCELLED: 'Cancelled'
+  })[status] || status;
+}
+
+function renderDeliveryStatusOptions(status, includeCancelled = false) {
+  const values = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
+  if (includeCancelled) values.push('CANCELLED');
+  return values.map((value) => `<option value="${value}" ${status === value ? 'selected' : ''}>${deliveryStatusLabel(value)}</option>`).join('');
+}
+
+function renderPickupStatusControl(orderId, status) {
+  const options = ['PENDING', 'ACCEPTED', 'DELIVERED', 'CANCELLED']
+    .map((value) => `<option value="${value}" ${value === status ? 'selected' : ''}>${pickupStatusLabel(value)}</option>`)
+    .join('');
+  return `<select class="pickup-status-select" data-order-id="${orderId}" data-current-status="${status}">${options}</select>`;
 }
 
 function dateLabel(date) {
@@ -157,21 +211,52 @@ function dateLabel(date) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function pickupDateLabel(value) {
+  if (!value) return '—';
+  const dateKey = typeof value === 'string' ? value.slice(0, 10) : getLocalDateString(value);
+  const date = new Date(`${dateKey}T12:00:00`);
+  return Number.isNaN(date.valueOf()) ? '—' : dateLabel(date);
+}
+
 function toDateOnly(dateValue) {
-  const value = new Date(dateValue);
-  if (Number.isNaN(value.getTime())) return null;
-  const date = new Date(value);
-  date.setHours(0, 0, 0, 0);
+  let dateKey;
+  if (typeof dateValue === 'string') {
+    const match = /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/.exec(dateValue);
+    dateKey = match?.[1] || null;
+  } else {
+    const value = new Date(dateValue);
+    if (!Number.isNaN(value.getTime())) {
+      dateKey = `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+    }
+  }
+  if (!dateKey) return null;
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
   return date;
 }
 
-function getTiffinRowState(endDate) {
+function getDateInputValue(dateValue) {
+  const value = new Date(dateValue);
+  if (typeof dateValue === 'string') {
+    const match = /^(\d{4}-\d{2}-\d{2})(?:T.*)?$/.exec(dateValue);
+    if (match) return toDateOnly(dateValue) ? match[1] : '';
+  }
+  if (Number.isNaN(value.getTime())) return '';
+  return getLocalDateString(value);
+}
+
+function getTiffinRowState(startDate, endDate) {
+  const finalStart = toDateOnly(startDate);
   const finalEnd = toDateOnly(endDate);
   const today = toDateOnly(new Date());
   if (!finalEnd || !today) return '';
-  const diff = Math.round((finalEnd - today) / (1000 * 60 * 60 * 24));
-  if (diff < 0) return 'row-expired';
-  if (diff <= 3) return 'row-warning';
+  if (finalEnd < today) return 'row-expired';
+  if (finalStart && finalStart.getTime() === finalEnd.getTime()) return 'row-expired';
+  if (finalStart) {
+    const diff = (finalEnd - finalStart) / (1000 * 60 * 60 * 24);
+    if (diff >= 0 && diff <= 3) return 'row-warning';
+  }
   return '';
 }
 
@@ -231,7 +316,7 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
   dateLabelEl.textContent = new Date(`${dateString}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   try {
-    const data = await api(`/analytics/tiffin-preparation?date=${encodeURIComponent(dateString)}`);
+    const data = await api(`/analytics/tiffin-preparation?date=${encodeURIComponent(dateString)}`, { cache: 'no-store' });
     const totals = data.totals || {};
     const counts = data.activePlanCounts || { full: { single: 0, couple: 0, family: 0 }, 'curry-only': { single: 0, couple: 0, family: 0 } };
     const selectedMenu = data.selectedMenu || { dalOption: 'Not selected', curryOption: 'Not selected' };
@@ -258,7 +343,8 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
       { item: 'Curd', quantity: 'Small', count: totals.smallCurd || 0 },
       { item: 'Curd', quantity: 'Big', count: totals.bigCurd || 0 },
       { item: 'Rice', quantity: '—', count: totals.riceBoxes || 0 },
-      { item: 'Chapathi', quantity: '—', count: totals.chapathiCount || 0 }
+      { item: 'Chapathi', quantity: '—', count: totals.chapathiCount || 0 },
+      ...(totals.otherItems || []).map((item) => ({ item: item.item, quantity: '—', count: item.count }))
     ];
 
     const menuRows = [
@@ -323,7 +409,7 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
             <tbody>
               ${dailyItemRows.map((row) => `
                 <tr>
-                  <td>${row.item}</td>
+                  <td>${escHtml(row.item)}</td>
                   <td>${row.quantity}</td>
                   <td>${row.count}</td>
                 </tr>
@@ -508,7 +594,7 @@ async function renderOrdersTable() {
   const table = document.getElementById('ordersTable');
   const headers = state.ordersFulfillment === 'delivery'
     ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Start Date', 'End Date', 'Delivery Member', 'Amount', 'Status']
-    : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Status', 'Section total'];
+    : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Pickup Date', 'Status', 'Section total'];
 
   table.innerHTML = `
     <table>
@@ -533,22 +619,27 @@ async function renderOrdersTable() {
                 : 'Tiffin Plan'
             );
             const tiffinStatus = String(order.status || 'PENDING').toUpperCase();
-            const startDate = tiffinStatus === 'PENDING' ? null : order.subscriptionStartDate;
+            const startDate = order.subscriptionStartDate;
             const endDate = order.subscriptionEndDate || order.createdAt;
-            const rowState = getTiffinRowState(order.subscriptionEndDate);
+            const rowState = getTiffinRowState(startDate, endDate);
             const amount = currency(order.totalAmount || (order.tiffinPlan?.price || 0));
             return `
               <tr class="${rowState}" data-order-id="${order._id}">
                 <td>${order.orderId}</td>
                 <td><strong>${customerName}</strong></td>
                 <td>${customer.phone || '—'}<br>${customer.email || '—'}</td>
-                <td>${itemName}</td>
+                <td>${escHtml(itemName)}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Edit Items</button></td>
                 <td>${order.type}</td>
-                <td>${startDate ? dateLabel(startDate) : '—'}</td>
                 <td>
                   <div class="tiffin-end-date-cell">
-                    <input type="date" class="tiffin-end-date-input" data-order-id="${order._id}" value="${getLocalDateString(endDate)}" />
-                    <button class="tiffin-end-date-save" data-order-id="${order._id}">Save</button>
+                    <input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${startDate ? getDateInputValue(startDate) : ''}" />
+                      <button class="delivery-start-date-save" data-order-id="${order._id}">Save</button>
+                  </div>
+                </td>
+                <td>
+                  <div class="tiffin-end-date-cell">
+                    <input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${getDateInputValue(endDate)}" />
+                    <button class="delivery-end-date-save" data-order-id="${order._id}">Save</button>
                   </div>
                 </td>
                 <td>
@@ -560,7 +651,7 @@ async function renderOrdersTable() {
                 <td>${amount}</td>
                 <td>
                   <select class="tiffin-status-select order-status-select" data-order-id="${order._id}" data-current-status="${tiffinStatus}">
-                    ${['PENDING', 'ACCEPTED', 'DELIVERED'].map((status) => `<option value="${status}" ${tiffinStatus === status ? 'selected' : ''}>${status}</option>`).join('')}
+                    ${renderDeliveryStatusOptions(tiffinStatus)}
                   </select>
                 </td>
               </tr>
@@ -588,39 +679,77 @@ async function renderOrdersTable() {
             <td>${orderDetails}</td>
             <td>${order.type}</td>
             ${state.ordersFulfillment === 'delivery'
-              ? `<td>—</td><td>—</td>${deliveryAssignment}<td>${currency(order.totalAmount)}</td>`
-              : `<td>Pickup</td><td>${orderDateTime}</td>`}
+              ? `<td><div class="tiffin-end-date-cell"><input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${order.subscriptionStartDate ? getDateInputValue(order.subscriptionStartDate) : ''}" /><button class="delivery-start-date-save" data-order-id="${order._id}">Save</button></div></td><td><div class="tiffin-end-date-cell"><input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${order.subscriptionEndDate ? getDateInputValue(order.subscriptionEndDate) : ''}" /><button class="delivery-end-date-save" data-order-id="${order._id}">Save</button></div></td>${deliveryAssignment}<td>${currency(order.totalAmount)}</td>`
+              : `<td>Pickup</td><td>${orderDateTime}</td><td><div class="tiffin-end-date-cell pickup-date-editor" data-order-id="${order._id}"><input type="date" class="pickup-date-input" data-order-id="${order._id}" value="${order.pickupDate ? getDateInputValue(order.pickupDate) : ''}" /><button type="button" class="pickup-date-save" data-order-id="${order._id}">Save</button></div></td>`}
             <td>
               ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}">
-                ${['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].map((status) => `<option value="${status}" ${order.status === status ? 'selected' : ''}>${status.replaceAll('_', ' ')}</option>`).join('')}
-              </select><span class="badge ${String(order.status).toLowerCase()}">${order.status}</span>` : pickupStatus === 'PENDING' ? `<select class="pickup-status-select" data-order-id="${order._id}" data-current-status="${pickupStatus}">
-                <option value="PENDING" selected disabled>PENDING</option>
-                <option value="ACCEPTED">ACCEPTED</option>
-                <option value="CANCELLED">CANCELLED</option>
-              </select>` : `<span class="badge ${String(pickupStatus).toLowerCase()}">${pickupStatus}</span>`}
+                ${renderDeliveryStatusOptions(order.status, true)}
+              </select><span class="badge ${String(order.status).toLowerCase()}">${deliveryStatusLabel(order.status)}</span>` : renderPickupStatusControl(order._id, pickupStatus)}
             </td>
             ${state.ordersFulfillment === 'pickup' ? `<td>${currency(order.totalAmount)}</td>` : ''}
           </tr>
         `;
-        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 10 : 8}">No ${state.ordersFulfillment} orders found.</td></tr>`}
+        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 10 : 9}">No ${state.ordersFulfillment} orders found.</td></tr>`}
       </tbody>
     </table>
   `;
 
-  table.querySelectorAll('.tiffin-end-date-save').forEach((button) => button.addEventListener('click', async () => {
-    const input = table.querySelector(`.tiffin-end-date-input[data-order-id="${button.dataset.orderId}"]`);
+  table.querySelectorAll('.edit-tiffin-items-btn').forEach((button) => button.addEventListener('click', async () => {
+    try {
+      await openTiffinItemsEditor(button.dataset.orderId);
+    } catch (error) {
+      showAdminToast(error.message || 'Could not open tiffin order items.');
+    }
+  }));
+
+  table.querySelectorAll('.delivery-start-date-save').forEach((button) => button.addEventListener('click', async () => {
+    const input = table.querySelector(`.delivery-start-date-input[data-order-id="${button.dataset.orderId}"]`);
+    const startDate = input?.value;
+    if (!startDate) return alert('Please choose a start date.');
+    try {
+      await api(`/orders/${button.dataset.orderId}/tiffin-end-date`, { method: 'PUT', body: JSON.stringify({ startDate }) });
+      showAdminDateSaveToast();
+      await renderOrdersTable();
+    } catch (error) {
+      alert(error.message || 'Could not update the start date');
+    }
+  }));
+
+  table.querySelectorAll('.delivery-end-date-save').forEach((button) => button.addEventListener('click', async () => {
+    const input = table.querySelector(`.delivery-end-date-input[data-order-id="${button.dataset.orderId}"]`);
     const endDate = input?.value;
     if (!endDate) return alert('Please choose an end date.');
     try {
       await api(`/orders/${button.dataset.orderId}/tiffin-end-date`, { method: 'PUT', body: JSON.stringify({ endDate }) });
+      showAdminDateSaveToast();
       await renderOrdersTable();
     } catch (error) {
       alert(error.message || 'Could not update the end date');
     }
   }));
 
+  table.querySelectorAll('.pickup-date-save').forEach((button) => button.addEventListener('click', async () => {
+    const input = table.querySelector(`.pickup-date-input[data-order-id="${button.dataset.orderId}"]`);
+    if (!input?.value) return alert('Please choose a pickup date.');
+    try {
+      await api(`/orders/${button.dataset.orderId}/pickup-date`, { method: 'PUT', body: JSON.stringify({ pickupDate: input.value }) });
+      showAdminDateSaveToast();
+      await renderOrdersTable();
+    } catch (error) {
+      alert(error.message || 'Could not update the pickup date');
+    }
+  }));
+
   table.querySelectorAll('.order-status-select').forEach((select) => select.addEventListener('change', async () => {
     const previous = select.dataset.currentStatus;
+    if (select.value === 'OUT_FOR_DELIVERY') {
+      const memberSelect = table.querySelector(`.delivery-member-select[data-order-id="${select.dataset.orderId}"]`);
+      if (!memberSelect?.value) {
+        select.value = previous;
+        showAdminToast('Choose a delivery member');
+        return;
+      }
+    }
     try {
       await api(`/orders/${select.dataset.orderId}/status`, { method: 'PUT', body: JSON.stringify({ status: select.value }) });
       await loadDashboardData();
@@ -669,8 +798,212 @@ async function renderOrdersTable() {
   }));
 }
 
+async function openTiffinItemsEditor(orderId) {
+  const [orderResponse, productsResponse] = await Promise.all([
+    api(`/orders/${orderId}`),
+    api('/products/all?active=true')
+  ]);
+  const order = orderResponse.order;
+  const isDeliveryTiffin = order?.type === 'tiffin'
+    && (order.items || []).some((item) => item.fulfillment === 'delivery')
+    && !(order.items || []).some((item) => item.fulfillment === 'pickup');
+  if (!isDeliveryTiffin) throw new Error('Only delivery tiffin orders can edit preparation items.');
+
+  tiffinEditorOrder = order;
+  tiffinEditorItems = (order.tiffinItems || []).map((item) => ({ ...item }));
+  tiffinEditorProducts = (productsResponse.products || []).filter((product) => product.active !== false);
+
+  const customer = order.customer || {};
+  const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
+  const packageItem = (order.items || []).find((item) => item.category === 'Tiffin Plans');
+  const packageType = order.tiffinPlan?.packageType === 'curry-only'
+    ? 'Curry-Only Package'
+    : order.tiffinPlan?.packageType === 'full'
+      ? 'Full Meal Package'
+      : packageItem?.productName || 'Tiffin Package';
+  const size = order.tiffinPlan?.size ? ` — ${order.tiffinPlan.size[0].toUpperCase()}${order.tiffinPlan.size.slice(1)}` : '';
+  document.getElementById('tiffinItemsOrderSummary').innerHTML = `
+    <div><strong>Order ID:</strong> ${escHtml(order.orderId || '—')}</div>
+    <div><strong>Customer:</strong> ${escHtml(customerName)}</div>
+    <div><strong>Package:</strong> ${escHtml(packageType + size)}${packageItem?.quantity > 1 ? ` × ${Number(packageItem.quantity)}` : ''}</div>
+    <div><strong>Start Date:</strong> ${escHtml(order.subscriptionStartDate || '—')}</div>
+    <div><strong>End Date:</strong> ${escHtml(order.subscriptionEndDate || '—')}</div>
+  `;
+  document.getElementById('tiffinAddItemProduct').innerHTML = `
+    <option value="">Select a catalog product</option>
+    ${tiffinEditorProducts.map((product) => `<option value="${escHtml(product._id)}">${escHtml(product.name)} (${escHtml(product.category || 'General')})</option>`).join('')}
+  `;
+  document.getElementById('tiffinAddItemQuantity').value = '1';
+  document.getElementById('tiffinAddItemForm').hidden = true;
+  document.getElementById('tiffinItemsMessage').textContent = '';
+  renderTiffinEditorItems();
+  const modal = document.getElementById('tiffinItemsModal');
+  modal.hidden = false;
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function getTiffinEditorPreparationType(productName) {
+  const name = String(productName || '').toLowerCase();
+  const size = /\b(big|large)\b/.test(name)
+    ? 'large'
+    : /\b(medium|med)\b/.test(name)
+      ? 'medium'
+      : 'small';
+  if (/\bdal\b/.test(name)) return `${size}Dal`;
+  if (/\bcurr(?:y|ies)\b/.test(name)) return `${size}Curry`;
+  if (/\bcurd\b/.test(name)) return size === 'large' ? 'bigCurd' : 'smallCurd';
+  if (/\bchapathi\b|\bchapati\b|\bchapatti\b/.test(name)) return 'chapathi';
+  if (/\brice\b/.test(name)) return 'riceBox';
+  return null;
+}
+
+function renderTiffinEditorItems() {
+  const list = document.getElementById('tiffinItemsList');
+  list.innerHTML = tiffinEditorItems.length
+    ? tiffinEditorItems.map((item, index) => `
+      <div class="tiffin-item-row">
+        <strong>${escHtml(item.productName)}</strong>
+        <button type="button" class="tiffin-item-step" data-item-index="${index}" data-step="-1" aria-label="Decrease ${escHtml(item.productName)} quantity">−</button>
+        <input class="tiffin-item-quantity" type="number" min="1" step="1" value="${Number(item.quantity)}" data-item-index="${index}" aria-label="${escHtml(item.productName)} quantity" />
+        <button type="button" class="tiffin-item-step" data-item-index="${index}" data-step="1" aria-label="Increase ${escHtml(item.productName)} quantity">+</button>
+        <button type="button" class="tiffin-item-remove" data-item-index="${index}">Remove</button>
+      </div>
+    `).join('')
+    : '<p class="muted">No preparation items in this order.</p>';
+}
+
+function closeTiffinItemsEditor() {
+  const modal = document.getElementById('tiffinItemsModal');
+  if (!modal) return;
+  modal.hidden = true;
+  modal.setAttribute('aria-hidden', 'true');
+  tiffinEditorOrder = null;
+  tiffinEditorItems = [];
+}
+
+document.getElementById('tiffinItemsCloseBtn')?.addEventListener('click', closeTiffinItemsEditor);
+document.getElementById('tiffinItemsCancelBtn')?.addEventListener('click', closeTiffinItemsEditor);
+document.getElementById('tiffinItemsModal')?.addEventListener('click', (event) => {
+  if (event.target === event.currentTarget) closeTiffinItemsEditor();
+});
+
+document.getElementById('tiffinAddItemToggle')?.addEventListener('click', () => {
+  const form = document.getElementById('tiffinAddItemForm');
+  form.hidden = !form.hidden;
+  if (!form.hidden) document.getElementById('tiffinAddItemProduct').focus();
+});
+
+document.getElementById('tiffinItemsList')?.addEventListener('click', (event) => {
+  const stepButton = event.target.closest('.tiffin-item-step');
+  const removeButton = event.target.closest('.tiffin-item-remove');
+  if (!stepButton && !removeButton) return;
+  const index = Number((stepButton || removeButton).dataset.itemIndex);
+  if (!Number.isInteger(index) || !tiffinEditorItems[index]) return;
+  if (removeButton) {
+    tiffinEditorItems.splice(index, 1);
+  } else {
+    const nextQuantity = Number(tiffinEditorItems[index].quantity) + Number(stepButton.dataset.step);
+    tiffinEditorItems[index].quantity = Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, nextQuantity));
+  }
+  renderTiffinEditorItems();
+});
+
+document.getElementById('tiffinItemsList')?.addEventListener('change', (event) => {
+  if (!event.target.matches('.tiffin-item-quantity')) return;
+  const index = Number(event.target.dataset.itemIndex);
+  const quantity = Number(event.target.value);
+  if (!Number.isInteger(index) || !tiffinEditorItems[index]) return;
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    document.getElementById('tiffinItemsMessage').textContent = 'Quantity must be a positive whole number.';
+    renderTiffinEditorItems();
+    return;
+  }
+  tiffinEditorItems[index].quantity = quantity;
+  document.getElementById('tiffinItemsMessage').textContent = '';
+});
+
+document.getElementById('tiffinAddItemForm')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const product = tiffinEditorProducts.find((item) => String(item._id) === document.getElementById('tiffinAddItemProduct').value);
+  const quantity = Number(document.getElementById('tiffinAddItemQuantity').value);
+  const message = document.getElementById('tiffinItemsMessage');
+  if (!product) {
+    message.textContent = 'Choose a catalog item to add.';
+    return;
+  }
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    message.textContent = 'Quantity must be a positive whole number.';
+    return;
+  }
+
+  const preparationType = getTiffinEditorPreparationType(product.name);
+  const existingItem = tiffinEditorItems.find((item) => (
+    String(item.productId || '') === String(product._id)
+    || (preparationType && item.preparationType === preparationType)
+  ));
+  if (existingItem) {
+    const combinedQuantity = Number(existingItem.quantity) + quantity;
+    if (!Number.isSafeInteger(combinedQuantity)) {
+      message.textContent = 'The combined item quantity is too large.';
+      return;
+    }
+    existingItem.quantity = combinedQuantity;
+  } else {
+    if (tiffinEditorItems.length >= 50) {
+      message.textContent = 'An order can contain at most 50 preparation items.';
+      return;
+    }
+    tiffinEditorItems.push({
+      productId: product._id,
+      productName: product.name,
+      category: product.category,
+      preparationType,
+      quantity
+    });
+  }
+  document.getElementById('tiffinAddItemProduct').value = '';
+  document.getElementById('tiffinAddItemQuantity').value = '1';
+  message.textContent = '';
+  renderTiffinEditorItems();
+});
+
+document.getElementById('tiffinItemsSaveBtn')?.addEventListener('click', async (event) => {
+  if (!tiffinEditorOrder) return;
+  const button = event.currentTarget;
+  const message = document.getElementById('tiffinItemsMessage');
+  button.disabled = true;
+  message.textContent = '';
+  try {
+    await api(`/orders/${tiffinEditorOrder._id}/tiffin-items`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        items: tiffinEditorItems.map((item) => ({
+          productId: item.productId || null,
+          preparationType: item.preparationType || null,
+          quantity: Number(item.quantity)
+        }))
+      })
+    });
+    closeTiffinItemsEditor();
+    showAdminToast('Order items updated successfully.');
+    try {
+      if (state.ordersFulfillment === 'delivery') await renderOrdersTable();
+      await loadTiffinPreparation(state.tiffinPreparationDate);
+    } catch (error) {
+      console.error('Order items were saved, but the dashboard refresh failed:', error);
+      showAdminToast(`Items saved, but refresh failed: ${error.message || 'Could not refresh preparation data.'}`);
+    }
+  } catch (error) {
+    message.textContent = error.message || 'Could not save order items.';
+  } finally {
+    button.disabled = false;
+  }
+});
+
 const manualOrderModal = document.getElementById('manualOrderModal');
 const manualOrderForm = document.getElementById('manualOrderForm');
+const manualPickupDateField = document.getElementById('manualPickupDateField');
+const manualPickupDate = document.getElementById('manualPickupDate');
 let manualOrderProducts = [];
 
 function closeManualOrderModal() {
@@ -686,6 +1019,9 @@ document.getElementById('addManualOrderBtn')?.addEventListener('click', async ()
   document.getElementById('manualOrderTitle').textContent = `Add ${fulfillment === 'delivery' ? 'Delivery' : 'Pickup'} Order`;
   document.getElementById('manualOrderFulfillment').textContent = `${fulfillment === 'delivery' ? 'Delivery' : 'Pickup'} order`;
   document.getElementById('manualAddressLabel').hidden = fulfillment !== 'delivery';
+  manualPickupDateField.hidden = false;
+  manualPickupDate.required = true;
+  manualPickupDate.min = getLocalDateString();
   try {
     const data = await api('/products/all');
     manualOrderProducts = (data.products || []).filter((product) => product.active !== false);
@@ -725,11 +1061,21 @@ manualOrderForm?.addEventListener('submit', async (event) => {
   const product = manualOrderProducts.find((item) => String(item._id) === productId);
   const quantity = Number(document.getElementById('manualQuantity').value);
   const amount = Number(document.getElementById('manualAmount').value);
+  const fulfillment = state.ordersFulfillment || 'delivery';
   if (!product || !Number.isInteger(quantity) || quantity < 1 || quantity > 99 || !Number.isFinite(amount) || amount < 0) {
     message.textContent = 'Choose a product and enter a valid quantity and amount.';
     return;
   }
-
+  if (!manualPickupDate.value) {
+    message.textContent = 'Order date is required.';
+    manualPickupDate.reportValidity();
+    return;
+  }
+  if (!manualPickupDate.checkValidity()) {
+    message.textContent = 'Order date must be today or a future date.';
+    manualPickupDate.reportValidity();
+    return;
+  }
   submitButton.disabled = true;
   message.textContent = 'Creating order...';
   try {
@@ -743,8 +1089,9 @@ manualOrderForm?.addEventListener('submit', async (event) => {
         productId,
         quantity,
         amount,
-        fulfillment: state.ordersFulfillment || 'delivery',
-        address: document.getElementById('manualAddress').value.trim()
+        fulfillment,
+        address: document.getElementById('manualAddress').value.trim(),
+        pickupDate: manualPickupDate.value
       })
     });
     closeManualOrderModal();

@@ -16,6 +16,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="dashboard-body">
+  <div id="adminDateSaveToast" class="admin-date-save-toast" role="status" aria-live="polite" hidden></div>
   <aside class="sidebar">
     <div class="brand-block">
       <img src="https://res.cloudinary.com/spfurewl/image/upload/v1789330411/sattwik-logo.png" alt="Sattwik Kitchen" />
@@ -50,41 +51,45 @@
         <p class="eyebrow">Business analytics</p>
         <h1>Dashboard</h1>
       </div>
-      <div class="toolbar">
-        <label>
-          Status
-          <select id="statusFilter">
-            <option value="">All</option>
-            <option value="PENDING">Pending</option>
-            <option value="ACCEPTED">Accepted</option>
-            <option value="OUT_FOR_DELIVERY">Out for delivery</option>
-            <option value="DELIVERED">Delivered</option>
-            <option value="CANCELLED">Cancelled</option>
-          </select>
-        </label>
-        <label>
-          Type
-          <select id="typeFilter">
-            <option value="">All</option>
-            <option value="product">Product</option>
-            <option value="tiffin">Tiffin</option>
-            <option value="custom">Custom</option>
-            <option value="catering">Catering</option>
-          </select>
-        </label>
-        <label>
-          From
-          <input id="fromDate" type="date" />
-        </label>
-        <label>
-          To
-          <input id="toDate" type="date" />
-        </label>
-        <button id="refreshBtn" class="btn btn-primary">Refresh</button>
-      </div>
     </header>
 
     <section id="overviewView" class="view-panel active">
+      <div class="overview-header">
+        <h2>Overview</h2>
+        <div class="toolbar">
+          <label>
+            Status
+            <select id="statusFilter">
+              <option value="">All</option>
+              <option value="PENDING">Pending</option>
+              <option value="ACCEPTED">Accepted</option>
+              <option value="OUT_FOR_DELIVERY">Out for delivery</option>
+              <option value="DELIVERED">Delivered</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </label>
+
+          <label>
+            Type
+            <select id="typeFilter">
+              <option value="">All</option>
+              <option value="product">Product</option>
+              <option value="tiffin">Tiffin</option>
+              <option value="custom">Custom</option>
+              <option value="catering">Catering</option>
+            </select>
+          </label>
+          <label>
+            From
+            <input id="fromDate" type="date" />
+          </label>
+          <label>
+            To
+            <input id="toDate" type="date" />
+          </label>
+          <button id="refreshBtn" class="btn btn-primary">Refresh</button>
+        </div>
+      </div>
       <div class="stats-grid" id="statsGrid"></div>
       <div class="charts-grid">
         <div class="panel card chart-panel large">
@@ -364,6 +369,7 @@
         <label>Quantity<input id="manualQuantity" type="number" min="1" max="99" step="1" value="1" required /></label>
         <label>Amount ($)<input id="manualAmount" type="number" min="0" step="0.01" required /></label>
         <label id="manualAddressLabel">Delivery Address (optional)<input id="manualAddress" type="text" autocomplete="street-address" /></label>
+        <label id="manualPickupDateField">Order Date (Pickup Date / Delivery Start Date)<input id="manualPickupDate" type="date" required /></label>
         <p id="manualOrderFulfillment" class="manual-order-fulfillment">Delivery order</p>
         <div class="manual-order-actions">
           <button type="submit" class="btn btn-primary" id="manualOrderSubmit">Create order</button>
@@ -371,6 +377,37 @@
         </div>
         <p id="manualOrderMessage" class="form-message" aria-live="polite"></p>
       </form>
+    </div>
+  </div>
+
+  <div id="tiffinItemsModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="tiffinItemsTitle" aria-hidden="true" hidden>
+    <div class="modal-shell tiffin-items-modal">
+      <div class="modal-header">
+        <h3 id="tiffinItemsTitle">Edit Tiffin Order Items</h3>
+        <button type="button" class="modal-close" id="tiffinItemsCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div id="tiffinItemsOrderSummary" class="tiffin-items-order-summary"></div>
+      <h4 class="tiffin-items-section-title">Items</h4>
+      <div id="tiffinItemsList" class="tiffin-items-list"></div>
+      <button type="button" id="tiffinAddItemToggle" class="btn btn-secondary tiffin-add-item-toggle">Add Item</button>
+      <form id="tiffinAddItemForm" class="tiffin-add-item-form" hidden>
+        <label>
+          Item
+          <select id="tiffinAddItemProduct" required>
+            <option value="">Select a catalog product</option>
+          </select>
+        </label>
+        <label>
+          Quantity
+          <input id="tiffinAddItemQuantity" type="number" min="1" step="1" value="1" required />
+        </label>
+        <button type="submit" class="btn btn-secondary">Add</button>
+      </form>
+      <p id="tiffinItemsMessage" class="form-message" role="status" aria-live="polite"></p>
+      <div class="tiffin-items-actions">
+        <button type="button" class="btn btn-primary" id="tiffinItemsSaveBtn">Save Changes</button>
+        <button type="button" class="btn btn-secondary" id="tiffinItemsCancelBtn">Cancel</button>
+      </div>
     </div>
   </div>
 

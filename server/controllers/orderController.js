@@ -5,7 +5,9 @@ const Product = require('../models/Product');
 const TiffinSubscription = require('../models/TiffinSubscription');
 const { TIFFIN_PRICES, tiffinDisplayName, ORDER_STATUSES, DELIVERY_STATUSES, STATUS_TRANSITIONS } = require('../utils/constants');
 const { emitOrderUpdate } = require('../utils/orderEvents');
-const { parseDateInput, addDays, getSubscriptionServiceDates } = require('../utils/tiffinPreparation');
+const { parseDateInput, formatDateKey, addDays, getSubscriptionServiceDates } = require('../utils/tiffinPreparation');
+const { getOrderServiceDates, getCurrentServiceDate, resolveDeliveryStatus, applyDeliveryStatus, withCurrentDeliveryStatus } = require('../utils/deliveryStatus');
+const { PREPARATION_TYPES, TIFFIN_PREPARATION_ITEMS, getTiffinPreparationType, buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('../utils/tiffinItems');
 
 function extractOrderFulfillment(orderItems = []) {
   if (!orderItems.length) return 'pickup';
@@ -13,6 +15,13 @@ function extractOrderFulfillment(orderItems = []) {
   if (deliveryCount === 0) return 'pickup';
   if (deliveryCount === orderItems.length) return 'delivery';
   return 'mixed';
+}
+
+function parseOrderDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = parseDateInput(value);
+  if (formatDateKey(date) !== value || value < formatDateKey(new Date())) return null;
+  return date;
 }
 
 function deriveSubscriptionDates(startDateValue, endDateValue) {
@@ -29,7 +38,7 @@ async function createTiffinSubscriptionsForOrder(order, payload = {}) {
   const firstEntry = entries.find((entry) => entry && entry.packageType && entry.size) || null;
   if (!firstEntry) return [];
 
-  const { startDate, endDate } = deriveSubscriptionDates(firstEntry.startDate || payload.startDate, firstEntry.endDate || payload.endDate);
+  const { startDate, endDate } = deriveSubscriptionDates(payload.pickupDate || firstEntry.startDate, firstEntry.endDate || payload.endDate);
 
   const subscription = await TiffinSubscription.findOneAndUpdate(
     { customerId: order.customer, orderId: order._id },
@@ -64,11 +73,12 @@ async function syncTiffinSubscriptionDates(order) {
 }
 
 function setTiffinAcceptanceDates(order) {
-  const acceptedAt = new Date();
-  const { startDate, endDate } = getSubscriptionServiceDates(acceptedAt);
-  order.acceptedAt = acceptedAt;
-  order.subscriptionStartDate = startDate;
-  order.subscriptionEndDate = endDate;
+  order.acceptedAt = new Date();
+  if (!order.subscriptionStartDate) {
+    const dates = getSubscriptionServiceDates(order.acceptedAt);
+    order.subscriptionStartDate = dates.startDate;
+    order.subscriptionEndDate = dates.endDate;
+  }
 }
 
 async function createOrder(req, res) {
@@ -177,8 +187,21 @@ async function createOrder(req, res) {
     }
   }
 
-  const tiffinStartDateValue = Array.isArray(tiffinPlans) && tiffinPlans.length ? (tiffinPlans[0].startDate || tiffinPlans[0].endDate || null) : null;
-  const subscriptionDates = Array.isArray(tiffinPlans) && tiffinPlans.length ? deriveSubscriptionDates(tiffinPlans[0].startDate || req.body?.startDate, tiffinPlans[0].endDate || req.body?.endDate) : null;
+  const fulfillment = extractOrderFulfillment(orderItems);
+  const pickupDateValue = String(req.body?.pickupDate || '').trim();
+  if (!pickupDateValue) {
+    return res.status(400).json({ message: 'Pickup date is required for every order.' });
+  }
+  const selectedOrderDate = parseOrderDate(pickupDateValue);
+  if (!selectedOrderDate) {
+    return res.status(400).json({ message: 'Pickup date must be a valid date on or after today.' });
+  }
+  const pickupDate = selectedOrderDate;
+
+  const deliveryDates = fulfillment !== 'pickup'
+    ? getSubscriptionServiceDates(selectedOrderDate)
+    : null;
+  const subscriptionDates = Array.isArray(tiffinPlans) && tiffinPlans.length ? deliveryDates : null;
 
   if (orderType === 'tiffin' && subscriptionDates?.startDate && tiffinPlanMeta.packageType) {
     const existingTiffinOrder = await Order.findOne({
@@ -223,20 +246,25 @@ async function createOrder(req, res) {
 
   totalAmount = Math.round(totalAmount * 100) / 100;
 
-  const fulfillment = extractOrderFulfillment(orderItems);
-
   const order = await Order.create({
     customer: customerDoc._id,
     customerId: customerDoc._id,
     items: orderItems,
+    ...(orderType === 'tiffin' ? {
+      tiffinItems: Array.isArray(tiffinPlans) && tiffinPlans.length
+        ? buildDefaultTiffinItems(tiffinPlans)
+        : []
+    } : {}),
     fulfillment,
     type: orderType,
     tiffinPlan: tiffinPlanMeta,
     customRequest: cleanCustom,
     totalAmount,
+    pickupDate,
+    subscriptionStartDate: deliveryDates?.startDate || null,
+    subscriptionEndDate: deliveryDates?.endDate || null,
+    deliveryStatusDate: deliveryDates?.serviceDates[0] || null,
     deliveryAddress: address || area || customerDoc.address || customerDoc.area || '',
-    subscriptionStartDate: subscriptionDates?.startDate || null,
-    subscriptionEndDate: subscriptionDates?.endDate || null,
     status: 'PENDING',
     placedAt: new Date()
   });
@@ -274,11 +302,15 @@ async function createOrder(req, res) {
 
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
   emitOrderUpdate(req.app, populated);
-  res.status(201).json({ message: 'Order saved', order: populated });
+  const responseOrder = populated.toObject();
+  responseOrder.pickupDate = formatDateKey(populated.pickupDate);
+  responseOrder.subscriptionStartDate = formatDateKey(populated.subscriptionStartDate);
+  responseOrder.subscriptionEndDate = formatDateKey(populated.subscriptionEndDate);
+  res.status(201).json({ message: 'Order saved', order: responseOrder });
 }
 
 async function createManualOrder(req, res) {
-  const { firstName, lastName, phone, email, productId, quantity, amount, fulfillment, address = '' } = req.body || {};
+  const { firstName, lastName, phone, email, productId, quantity, amount, fulfillment, address = '', pickupDate: pickupDateValue } = req.body || {};
   const cleanFirstName = String(firstName || '').trim();
   const cleanLastName = String(lastName || '').trim();
   const cleanPhone = String(phone || '').trim();
@@ -298,7 +330,17 @@ async function createManualOrder(req, res) {
   if (!['delivery', 'pickup'].includes(cleanFulfillment)) {
     return res.status(400).json({ message: 'Fulfillment must be delivery or pickup.' });
   }
-
+  if (!String(pickupDateValue || '').trim()) {
+    return res.status(400).json({ message: 'Pickup date is required for every order.' });
+  }
+  const selectedOrderDate = parseOrderDate(String(pickupDateValue).trim());
+  if (!selectedOrderDate) {
+    return res.status(400).json({ message: 'Pickup date must be a valid date on or after today.' });
+  }
+  const pickupDate = selectedOrderDate;
+  const subscriptionDates = cleanFulfillment === 'delivery'
+    ? getSubscriptionServiceDates(selectedOrderDate)
+    : null;
   const product = await Product.findOne({ _id: productId, active: true }).lean();
   if (!product) return res.status(400).json({ message: 'Select an active catalog product.' });
   if (product.stock < parsedQuantity) {
@@ -344,6 +386,10 @@ async function createManualOrder(req, res) {
       fulfillment: cleanFulfillment,
       type: 'product',
       totalAmount: roundedAmount,
+      pickupDate,
+      subscriptionStartDate: subscriptionDates?.startDate || null,
+      subscriptionEndDate: subscriptionDates?.endDate || null,
+      deliveryStatusDate: subscriptionDates?.serviceDates[0] || null,
       deliveryAddress: String(address || customer.address || customer.area || '').trim(),
       status: 'PENDING',
       placedAt: new Date()
@@ -356,7 +402,11 @@ async function createManualOrder(req, res) {
   req.app.get('io')?.emit('product:stockUpdated', { productId: updatedProduct._id, stock: updatedProduct.stock, product: updatedProduct });
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
   emitOrderUpdate(req.app, populated);
-  return res.status(201).json({ message: 'Manual order saved', order: populated });
+  const responseOrder = populated.toObject();
+  responseOrder.pickupDate = formatDateKey(populated.pickupDate);
+  responseOrder.subscriptionStartDate = formatDateKey(populated.subscriptionStartDate);
+  responseOrder.subscriptionEndDate = formatDateKey(populated.subscriptionEndDate);
+  return res.status(201).json({ message: 'Manual order saved', order: responseOrder });
 }
 
 async function listOrders(req, res) {
@@ -485,7 +535,27 @@ async function listOrders(req, res) {
   const statusCounts = await Order.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]);
 
   res.json({
-    orders: result?.data || [],
+    orders: (result?.data || []).map((order) => {
+      const hasDeliveryItems = (order.items || []).some((item) => item.fulfillment === 'delivery');
+      const deliveryStartDate = hasDeliveryItems
+        ? order.subscriptionStartDate || order.pickupDate
+        : order.subscriptionStartDate;
+      const derivedDeliveryDates = hasDeliveryItems && deliveryStartDate && !order.subscriptionEndDate
+        ? getSubscriptionServiceDates(parseDateInput(deliveryStartDate))
+        : null;
+      const deliveryStatusOrder = withCurrentDeliveryStatus({
+        ...order,
+        subscriptionStartDate: deliveryStartDate,
+        subscriptionEndDate: order.subscriptionEndDate || derivedDeliveryDates?.endDate
+      });
+      return {
+        ...deliveryStatusOrder,
+        pickupDate: formatDateKey(order.pickupDate),
+        subscriptionStartDate: formatDateKey(deliveryStartDate),
+        subscriptionEndDate: formatDateKey(order.subscriptionEndDate || derivedDeliveryDates?.endDate),
+        deliveryStatusDate: formatDateKey(order.deliveryStatusDate)
+      };
+    }),
     total,
     page: p,
     pages: Math.ceil(total / l),
@@ -496,7 +566,131 @@ async function listOrders(req, res) {
 async function getOrder(req, res) {
   const order = await Order.findById(req.params.id).populate('customer', 'firstName lastName phone email area');
   if (!order) return res.status(404).json({ message: 'Order not found' });
-  res.json({ order });
+  const responseOrder = order.toObject();
+  Object.assign(responseOrder, withCurrentDeliveryStatus(responseOrder));
+  if (responseOrder.type === 'tiffin') {
+    responseOrder.tiffinItems = getLegacyOrderTiffinItems(responseOrder);
+  }
+  responseOrder.pickupDate = formatDateKey(order.pickupDate);
+  responseOrder.subscriptionStartDate = formatDateKey(order.subscriptionStartDate);
+  responseOrder.subscriptionEndDate = formatDateKey(order.subscriptionEndDate);
+  responseOrder.deliveryStatusDate = formatDateKey(order.deliveryStatusDate);
+  res.json({ order: responseOrder });
+}
+
+async function updateTiffinItems(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid order ID.' });
+  }
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+  const isDeliveryTiffin = order.type === 'tiffin'
+    && (order.items || []).some((item) => item.fulfillment === 'delivery')
+    && !(order.items || []).some((item) => item.fulfillment === 'pickup');
+  if (!isDeliveryTiffin) {
+    return res.status(400).json({ message: 'Only delivery tiffin orders can update preparation items.' });
+  }
+
+  const items = req.body?.items;
+  if (!Array.isArray(items) || items.length > 50) {
+    return res.status(400).json({ message: 'Provide a valid list of up to 50 tiffin items.' });
+  }
+
+  const productIds = new Set();
+  for (const item of items) {
+    const quantity = Number(item?.quantity);
+    if (!Number.isSafeInteger(quantity) || quantity < 1) {
+      return res.status(400).json({ message: 'Tiffin item quantities must be positive whole numbers.' });
+    }
+    if (item?.productId) {
+      if (!mongoose.isValidObjectId(item.productId)) {
+        return res.status(400).json({ message: 'Invalid product selected.' });
+      }
+      const productId = String(item.productId);
+      if (productIds.has(productId)) {
+        return res.status(400).json({ message: 'Each catalog product can only appear once.' });
+      }
+      productIds.add(productId);
+    } else if (!PREPARATION_TYPES.includes(item?.preparationType)) {
+      return res.status(400).json({ message: 'Invalid tiffin preparation item.' });
+    }
+  }
+
+  const products = productIds.size
+    ? await Product.find({ _id: { $in: [...productIds] } }).select('name category active').lean()
+    : [];
+  const productsById = new Map(products.map((product) => [String(product._id), product]));
+  const savedProductsById = new Map(
+    (order.tiffinItems || [])
+      .filter((item) => item.productId)
+      .map((item) => [String(item.productId), item])
+  );
+  const updatedItems = [];
+  for (const item of items) {
+    const quantity = Number(item?.quantity);
+    if (item?.productId) {
+      const productId = String(item.productId);
+      const product = productsById.get(productId);
+      const savedProduct = savedProductsById.get(productId);
+      if (!product && !savedProduct) return res.status(400).json({ message: 'Selected product is unavailable.' });
+      if (product && !product.active && !savedProduct) {
+        return res.status(400).json({ message: 'Selected product is inactive.' });
+      }
+      updatedItems.push({
+        productId: product?._id || savedProduct.productId,
+        productName: product?.name || savedProduct.productName,
+        category: product?.category || savedProduct.category,
+        preparationType: product ? getTiffinPreparationType(product.name) : savedProduct.preparationType,
+        quantity
+      });
+      continue;
+    }
+
+    const preparationType = item?.preparationType;
+    const component = TIFFIN_PREPARATION_ITEMS[preparationType];
+    updatedItems.push({
+      productId: null,
+      productName: component.productName,
+      category: component.category,
+      preparationType,
+      quantity
+    });
+  }
+
+  order.tiffinItems = updatedItems;
+  order.tiffinItemsCustomized = true;
+  await order.save();
+  const responseOrder = order.toObject();
+  Object.assign(responseOrder, withCurrentDeliveryStatus(responseOrder));
+  return res.json({ message: 'Order items updated successfully.', order: responseOrder });
+}
+
+async function updatePickupDate(req, res) {
+  const rawDate = String(req.body?.pickupDate || '').trim();
+  if (!rawDate) return res.status(400).json({ message: 'Pickup date is required.' });
+  const pickupDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? parseDateInput(rawDate) : null;
+  if (!pickupDate || formatDateKey(pickupDate) !== rawDate) {
+    return res.status(400).json({ message: 'Invalid pickup date.' });
+  }
+
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+  const pickupItems = (order.items || []).filter((item) => item.fulfillment === 'pickup');
+  if (!pickupItems.length && order.fulfillment !== 'pickup') {
+    return res.status(400).json({ message: 'Only orders with pickup items can update the pickup date.' });
+  }
+
+  order.pickupDate = pickupDate;
+  await order.save();
+  const populated = await Order.findById(order._id)
+    .populate('customer', 'firstName lastName phone email address area')
+    .populate('deliveryMemberId', 'name phone email');
+  emitOrderUpdate(req.app, populated);
+  return res.json({
+    message: 'Pickup date updated.',
+    pickupDate: formatDateKey(populated.pickupDate),
+    order: populated
+  });
 }
 
 async function updateStatus(req, res) {
@@ -515,17 +709,12 @@ async function updateStatus(req, res) {
     return res.status(400).json({ message: 'Pickup-only orders cannot be updated through the delivery workflow.' });
   }
   if (fulfillmentScope === 'pickup' || isPickupOnly) {
-    if (!['ACCEPTED', 'CANCELLED'].includes(status)) {
-      return res.status(400).json({ message: 'Pickup orders can only transition from PENDING to ACCEPTED or CANCELLED.' });
-    }
     if (!pickupItems.length) return res.status(400).json({ message: 'Order has no pickup items.' });
-    const pickupStatuses = pickupItems.map((item) => String(item.deliveryStatus || (isPickupOnly ? order.status : 'PENDING')).toUpperCase());
-    if (pickupStatuses.some((currentStatus) => currentStatus !== 'PENDING')) {
-      return res.status(400).json({ message: 'Pickup status can only change from PENDING.' });
+    if (!['PENDING', 'ACCEPTED', 'DELIVERED', 'CANCELLED'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid pickup status.' });
     }
     pickupItems.forEach((item) => { item.deliveryStatus = status; });
     if (isPickupOnly) order.status = status;
-    if (status === 'ACCEPTED' && isPickupOnly) order.acceptedAt = new Date();
     await order.save();
     await syncTiffinSubscriptionStatus(order);
     const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
@@ -533,19 +722,27 @@ async function updateStatus(req, res) {
     return res.json({ message: `Pickup marked as ${status}`, order: populated });
   }
   const isDeliveryOrder = deliveryItems.length > 0;
+  if (isDeliveryOrder && getOrderServiceDates(order).length && !getCurrentServiceDate(order)) {
+    return res.status(400).json({ message: 'No delivery service is scheduled for today.' });
+  }
+  const currentDeliveryStatus = resolveDeliveryStatus(order);
+  if (status === 'OUT_FOR_DELIVERY' && !order.deliveryMemberId) {
+    return res.status(400).json({ message: 'Choose a delivery member' });
+  }
   if (!isDeliveryOrder && ['OUT_FOR_DELIVERY', 'DELIVERED'].includes(status)) {
     return res.status(400).json({ message: 'Pickup-only orders cannot move into delivery workflow.' });
   }
   if (order.type === 'tiffin' && isDeliveryOrder) {
-    const currentStatus = String(order.status || '').toUpperCase();
+    const currentStatus = currentDeliveryStatus;
     const isAcceptance = currentStatus === 'PENDING' && status === 'ACCEPTED';
-    const isDeliveryCompletion = currentStatus === 'ACCEPTED' && status === 'DELIVERED';
-    if (!isAcceptance && !isDeliveryCompletion) {
+    const isOutForDelivery = currentStatus === 'ACCEPTED' && status === 'OUT_FOR_DELIVERY';
+    const isDeliveryCompletion = currentStatus === 'OUT_FOR_DELIVERY' && status === 'DELIVERED';
+    if (!isAcceptance && !isOutForDelivery && !isDeliveryCompletion) {
       return res.status(400).json({ message: `Invalid tiffin delivery transition from ${currentStatus} to ${status}.` });
     }
     if (isAcceptance) setTiffinAcceptanceDates(order);
-    order.status = status;
-    deliveryItems.forEach((item) => { item.deliveryStatus = status; });
+    applyDeliveryStatus(order, status);
+    if (isOutForDelivery) order.outForDeliveryAt = new Date();
     if (status === 'DELIVERED') order.deliveredAt = new Date();
     await order.save();
     if (isAcceptance) await syncTiffinSubscriptionDates(order);
@@ -554,16 +751,14 @@ async function updateStatus(req, res) {
     emitOrderUpdate(req.app, populated);
     return res.json({ message: `Order marked as ${status}`, order: populated });
   }
-  if (DELIVERY_STATUSES.includes(order.status) || DELIVERY_STATUSES.includes(status)) {
-    if (STATUS_TRANSITIONS[order.status] !== status) return res.status(400).json({ message: `Invalid transition from ${order.status} to ${status}.` });
+  if (DELIVERY_STATUSES.includes(currentDeliveryStatus) || DELIVERY_STATUSES.includes(status)) {
+    if (STATUS_TRANSITIONS[currentDeliveryStatus] !== status) return res.status(400).json({ message: `Invalid transition from ${currentDeliveryStatus} to ${status}.` });
     if (status === 'ACCEPTED') order.acceptedAt = new Date();
     if (status === 'OUT_FOR_DELIVERY') order.outForDeliveryAt = new Date();
     if (status === 'DELIVERED') order.deliveredAt = new Date();
   }
-  order.status = status;
-  if (DELIVERY_STATUSES.includes(status)) {
-    deliveryItems.forEach((item) => { item.deliveryStatus = status; });
-  }
+  if (isDeliveryOrder && DELIVERY_STATUSES.includes(status)) applyDeliveryStatus(order, status);
+  else order.status = status;
   await order.save();
   await syncTiffinSubscriptionStatus(order);
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
@@ -589,18 +784,21 @@ async function assignDeliveryMember(req, res) {
     return res.status(400).json({ message: 'Pickup-only orders cannot be assigned to a delivery member.' });
   }
   
-  if (['CANCELLED', 'cancelled', 'DELIVERED', 'delivered'].includes(order.status)) {
+  const currentStatus = resolveDeliveryStatus(order);
+  const currentServiceDate = getCurrentServiceDate(order);
+  if (['CANCELLED', 'DELIVERED'].includes(currentStatus)) {
     return res.status(400).json({ message: 'Cannot assign a cancelled or delivered order' });
   }
 
   order.deliveryMemberId = deliveryMemberId;
-  const acceptingTiffin = order.type === 'tiffin' && (['PENDING', 'pending'].includes(order.status) || !order.status);
-  if (['PENDING', 'pending'].includes(order.status) || !order.status) {
-    order.status = 'ACCEPTED';
+  const acceptingTiffin = order.type === 'tiffin' && (currentStatus === 'PENDING' || !currentStatus);
+  if ((currentStatus === 'PENDING' || !currentStatus) && currentServiceDate) {
+    applyDeliveryStatus(order, 'ACCEPTED');
     if (acceptingTiffin) setTiffinAcceptanceDates(order);
     else order.acceptedAt = new Date();
+  } else if (currentServiceDate) {
+    applyDeliveryStatus(order, currentStatus);
   }
-  deliveryItems.forEach((item) => { item.deliveryStatus = order.status; });
   await order.save();
   if (acceptingTiffin) await syncTiffinSubscriptionDates(order);
   
@@ -610,30 +808,85 @@ async function assignDeliveryMember(req, res) {
 }
 
 async function updateTiffinEndDate(req, res) {
-  const rawDate = String(req.body?.endDate || '').trim();
-  if (!rawDate) return res.status(400).json({ message: 'End date is required.' });
+  const hasStartDate = Object.prototype.hasOwnProperty.call(req.body || {}, 'startDate');
+  const hasEndDate = Object.prototype.hasOwnProperty.call(req.body || {}, 'endDate');
+  const hasPickupDate = Object.prototype.hasOwnProperty.call(req.body || {}, 'pickupDate');
+  if ([hasStartDate, hasEndDate, hasPickupDate].filter(Boolean).length !== 1) {
+    return res.status(400).json({ message: 'Provide exactly one of start date, end date or pickup date.' });
+  }
+
+  const dateType = hasStartDate ? 'start' : hasPickupDate ? 'pickup' : 'end';
+  const rawDate = String((hasStartDate ? req.body.startDate : hasPickupDate ? req.body.pickupDate : req.body.endDate) || '').trim();
+  if (!rawDate) return res.status(400).json({ message: `${dateType === 'start' ? 'Start' : dateType === 'pickup' ? 'Pickup' : 'End'} date is required.` });
 
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ message: 'Order not found.' });
-  if (order.type !== 'tiffin') return res.status(400).json({ message: 'Only tiffin subscription orders can update the end date.' });
+  if (hasPickupDate) {
+    const pickupItems = (order.items || []).filter((item) => item.fulfillment === 'pickup');
+    if (!pickupItems.length && order.fulfillment !== 'pickup') {
+      return res.status(400).json({ message: 'Only pickup orders can update the pickup date.' });
+    }
+  } else {
+    const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
+    if (!deliveryItems.length && order.fulfillment !== 'delivery') {
+      return res.status(400).json({ message: 'Only delivery orders can update delivery dates.' });
+    }
+  }
 
-  const parsedDate = new Date(`${rawDate}T12:00:00`);
-  if (Number.isNaN(parsedDate.getTime())) return res.status(400).json({ message: 'Invalid end date.' });
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? parseDateInput(rawDate) : null;
+  if (!parsedDate || formatDateKey(parsedDate) !== rawDate) {
+    return res.status(400).json({ message: `Invalid ${dateType} date.` });
+  }
 
-  const startDate = order.subscriptionStartDate || new Date(order.createdAt || Date.now());
-  if (parsedDate < new Date(startDate)) return res.status(400).json({ message: 'End date cannot be before the start date.' });
+  if (hasPickupDate) {
+    order.pickupDate = parsedDate;
+  } else if (hasStartDate) {
+    const dates = getSubscriptionServiceDates(parsedDate);
+    if (!dates.startDate || !dates.endDate || dates.serviceDates.length !== 20) {
+      return res.status(400).json({ message: 'Could not calculate 20 serviceable weekdays for the start date.' });
+    }
+    const startDateChanged = formatDateKey(order.subscriptionStartDate) !== rawDate;
+    order.subscriptionStartDate = dates.startDate;
+    order.subscriptionEndDate = dates.endDate;
+    if (startDateChanged) {
+      const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
+      if (deliveryItems.length) {
+        order.status = 'PENDING';
+        deliveryItems.forEach((item) => { item.deliveryStatus = 'PENDING'; });
+        order.deliveryStatusDate = getOrderServiceDates(order)[0] || null;
+        order.acceptedAt = null;
+        order.outForDeliveryAt = null;
+        order.deliveredAt = null;
+      }
+    }
+  } else {
+    const startDate = order.subscriptionStartDate || new Date(order.createdAt || Date.now());
+    if (parsedDate < new Date(startDate)) return res.status(400).json({ message: 'End date cannot be before the start date.' });
+    order.subscriptionEndDate = parsedDate;
+  }
 
-  order.subscriptionEndDate = parsedDate;
   await order.save();
 
-  await TiffinSubscription.updateMany(
-    { orderId: order._id },
-    { $set: { endDate: parsedDate } }
-  );
+  if (order.type === 'tiffin' && !hasPickupDate) {
+    await TiffinSubscription.updateMany(
+      { orderId: order._id },
+      {
+        $set: hasStartDate
+          ? { startDate: order.subscriptionStartDate, endDate: order.subscriptionEndDate }
+          : { endDate: order.subscriptionEndDate }
+      }
+    );
+  }
 
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
   emitOrderUpdate(req.app, populated);
-  res.json({ message: 'Tiffin delivery end date updated.', order: populated });
+  res.json({
+    message: hasPickupDate ? 'Pickup date updated.' : hasStartDate ? 'Tiffin delivery dates updated.' : 'Tiffin delivery end date updated.',
+    pickupDate: formatDateKey(populated.pickupDate),
+    startDate: formatDateKey(populated.subscriptionStartDate),
+    endDate: formatDateKey(populated.subscriptionEndDate),
+    order: populated
+  });
 }
 
 async function deleteOrder(req, res) {
@@ -644,4 +897,4 @@ async function deleteOrder(req, res) {
   res.json({ message: 'Order deleted' });
 }
 
-module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateStatus, deleteOrder, assignDeliveryMember, updateTiffinEndDate };
+module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateTiffinItems, updateStatus, deleteOrder, assignDeliveryMember, updatePickupDate, updateTiffinEndDate };

@@ -1,4 +1,5 @@
-const { TIFFIN_PREPARATION_RULES, TIFFIN_MENU_BY_WEEKDAY } = require('./constants');
+const { TIFFIN_MENU_BY_WEEKDAY } = require('./constants');
+const { getLegacyOrderTiffinItems } = require('./tiffinItems');
 
 function getLocalDate(dateValue = new Date()) {
   const value = dateValue instanceof Date ? dateValue : new Date(dateValue);
@@ -116,34 +117,38 @@ function buildPreparationTotals(subscriptions = []) {
     riceBoxes: 0,
     chapathiCount: 0,
     smallCurd: 0,
-    bigCurd: 0
+    bigCurd: 0,
+    otherItems: []
   };
-
-  const sizeMap = {
-    single: 'small',
-    couple: 'medium',
-    family: 'large'
-  };
+  const otherItems = new Map();
 
   for (const subscription of subscriptions) {
-    if (!subscription || !subscription.packageType || !subscription.size) continue;
-    const packageType = String(subscription.packageType);
-    const size = String(subscription.size);
-    const rule = TIFFIN_PREPARATION_RULES[packageType]?.[size];
-    if (!rule) continue;
-
-    const prepSize = sizeMap[size] || size;
-    totals[`${prepSize}Curries`] += 1;
-    totals[`${prepSize}Dal`] += 1;
-
-    if (packageType === 'full') {
-      totals.riceBoxes += Number(rule.rice || 0);
-      totals.chapathiCount += Number(rule.chapati || 0);
-      if (rule.curd === 'small') totals.smallCurd += 1;
-      if (rule.curd === 'big') totals.bigCurd += 1;
+    if (!subscription) continue;
+    const tiffinItems = getLegacyOrderTiffinItems(subscription.orderId, subscription);
+    for (const item of tiffinItems) {
+      const quantity = Number(item.quantity) || 0;
+      if (quantity <= 0) continue;
+      const totalKey = {
+        smallDal: 'smallDal',
+        mediumDal: 'mediumDal',
+        largeDal: 'largeDal',
+        smallCurry: 'smallCurries',
+        mediumCurry: 'mediumCurries',
+        largeCurry: 'largeCurries',
+        smallCurd: 'smallCurd',
+        bigCurd: 'bigCurd',
+        riceBox: 'riceBoxes',
+        chapathi: 'chapathiCount'
+      }[item.preparationType];
+      if (totalKey) {
+        totals[totalKey] += quantity;
+      } else if (item.productName) {
+        otherItems.set(item.productName, (otherItems.get(item.productName) || 0) + quantity);
+      }
     }
   }
 
+  totals.otherItems = [...otherItems].map(([item, count]) => ({ item, count }));
   return totals;
 }
 

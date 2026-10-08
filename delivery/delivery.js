@@ -25,13 +25,21 @@ document.getElementById('deliveryLoginForm')?.addEventListener('submit', async (
 });
 
 function money(value) { return `$${Number(value || 0).toFixed(2)}`; }
+function deliveryStatusLabel(status) {
+  return ({
+    PENDING: 'Pending',
+    ACCEPTED: 'Accepted',
+    OUT_FOR_DELIVERY: 'Out for Delivery',
+    DELIVERED: 'Delivered'
+  })[status] || status;
+}
 function orderCard(order) {
   const next = { ACCEPTED: 'OUT_FOR_DELIVERY', OUT_FOR_DELIVERY: 'DELIVERED' }[order.status];
   const actionText = { OUT_FOR_DELIVERY: 'Start Delivery', DELIVERED: 'Mark as Delivered' }[next];
   const customer = order.customer || {};
   const activeLabel = ['ACCEPTED', 'OUT_FOR_DELIVERY'].includes(order.status) ? '<strong class="active-delivery-label">MY ACTIVE DELIVERY</strong>' : '';
   const acceptedTime = order.acceptedAt ? `<div><strong>Accepted</strong><br>${new Date(order.acceptedAt).toLocaleString()}</div>` : '';
-  return `<article class="delivery-order assigned-delivery" data-delivery-order="${order._id}">${activeLabel}<div class="delivery-order-head"><div><h2>${order.orderId}</h2><p>${customer.firstName || ''} ${customer.lastName || ''} • ${customer.phone || ''}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${order.deliveryAddress || customer.address || customer.area || 'Not provided'}</div><div><strong>Current status</strong><br>${order.status}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${item.productName} × ${item.quantity}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${order._id}" data-next-status="${next}" ${next ? '' : 'disabled'}>${actionText || 'Complete'}</button></div></article>`;
+  return `<article class="delivery-order assigned-delivery" data-delivery-order="${order._id}">${activeLabel}<div class="delivery-order-head"><div><h2>${order.orderId}</h2><p>${customer.firstName || ''} ${customer.lastName || ''} • ${customer.phone || ''}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${order.deliveryAddress || customer.address || customer.area || 'Not provided'}</div><div><strong>Current status</strong><br>${deliveryStatusLabel(order.status)}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${item.productName} × ${item.quantity}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${order._id}" data-next-status="${next}" ${next ? '' : 'disabled'}>${actionText || 'Complete'}</button></div></article>`;
 }
 
 async function loadDeliveryOrders() {
@@ -46,6 +54,16 @@ async function loadDeliveryOrders() {
     }));
   } catch (error) { deliveryMessage.textContent = error.message; }
 }
+
+function scheduleServiceDayRefresh() {
+  const nextMidnight = new Date();
+  nextMidnight.setHours(24, 0, 0, 50);
+  window.setTimeout(() => {
+    loadDeliveryOrders();
+    scheduleServiceDayRefresh();
+  }, nextMidnight.getTime() - Date.now());
+}
+if (!isDeliveryLogin) scheduleServiceDayRefresh();
 
 document.getElementById('deliveryLogout')?.addEventListener('click', () => { localStorage.removeItem('sattwikDeliveryToken'); localStorage.removeItem('sattwikDeliveryMember'); window.location.href = '/delivery/login.html'; });
 

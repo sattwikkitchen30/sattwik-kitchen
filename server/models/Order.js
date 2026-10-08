@@ -12,13 +12,24 @@ const itemSchema = new mongoose.Schema({
   subtotal: { type: Number, required: true, min: 0 }
 }, { _id: false });
 
+const tiffinItemSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
+  productName: { type: String, required: true },
+  category: { type: String, default: 'Tiffin Preparation' },
+  preparationType: { type: String, default: null },
+  quantity: { type: Number, required: true, min: 1 }
+}, { _id: false });
+
 const orderSchema = new mongoose.Schema({
   orderId: { type: String, unique: true, index: true },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
   customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: false, index: true },
+  pickupDate: { type: Date, default: null },
   subscriptionStartDate: { type: Date, default: null, index: true },
   subscriptionEndDate: { type: Date, default: null, index: true },
   items: { type: [itemSchema], default: [] },
+  tiffinItems: { type: [tiffinItemSchema], default: undefined },
+  tiffinItemsCustomized: { type: Boolean, default: false },
   fulfillment: { type: String, enum: ['pickup', 'delivery', 'mixed'], default: 'pickup' },
   type: { type: String, enum: ['product', 'tiffin', 'catering', 'custom'], default: 'product' },
   tiffinPlan: {
@@ -34,6 +45,7 @@ const orderSchema = new mongoose.Schema({
   acceptedAt: { type: Date, default: null },
   outForDeliveryAt: { type: Date, default: null },
   deliveredAt: { type: Date, default: null },
+  deliveryStatusDate: { type: Date, default: null },
   status: { type: String, enum: ORDER_STATUSES, default: 'pending' },
   isDemo: { type: Boolean, default: false }
 }, { timestamps: true });

@@ -431,6 +431,7 @@ async function customOrders(req, res) {
 }
 
 async function tiffinPreparation(req, res) {
+  res.set('Cache-Control', 'no-store');
   const requestedDate = parseDateInput(req.query.date || new Date());
   const dateKey = formatDateKey(requestedDate);
   const selectedDate = new Date(`${dateKey}T12:00:00`);
@@ -469,7 +470,7 @@ async function tiffinPreparation(req, res) {
     status: { $ne: 'CANCELLED' },
     startDate: { $lte: endOfDay(selectedDate) },
     endDate: { $gte: startOfDay(selectedDate) }
-  }).lean();
+  }).populate('orderId', 'tiffinItems tiffinItemsCustomized tiffinPlan items').lean();
 
   const totals = buildPreparationTotals(subscriptions);
   const activePlanCounts = buildActivePlanCounts(subscriptions);

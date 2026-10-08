@@ -967,17 +967,41 @@
             <div class="plan-top"><span>Single</span><strong>$120</strong></div>
             <p>Curry-only 20-day package</p>
             <ul><li>8 oz dal</li><li>8 oz curry</li><li>Monday–Friday service</li></ul>
+            <div class="plan-actions">
+              <div class="qty-control">
+                <button type="button" class="qty-minus" data-tiffin-action="decrease" data-tiffin-plan="curry-single">−</button>
+                <span class="qty-value" data-tiffin-qty="curry-single">0</span>
+                <button type="button" class="qty-plus" data-tiffin-action="increase" data-tiffin-plan="curry-single">+</button>
+              </div>
+              <button type="button" class="plan-choose-btn" data-tiffin-choose="curry-single">Choose Plan</button>
+            </div>
           </article>
           <article class="plan-card featured" data-tiffin-plan="curry-couple" data-tiffin-price="160">
             <div class="popular">Great for two</div>
             <div class="plan-top"><span>Couple</span><strong>$160</strong></div>
             <p>Curry-only 20-day package</p>
             <ul><li>12 oz dal</li><li>12 oz curry</li><li>Monday–Friday service</li></ul>
+            <div class="plan-actions">
+              <div class="qty-control">
+                <button type="button" class="qty-minus" data-tiffin-action="decrease" data-tiffin-plan="curry-couple">−</button>
+                <span class="qty-value" data-tiffin-qty="curry-couple">0</span>
+                <button type="button" class="qty-plus" data-tiffin-action="increase" data-tiffin-plan="curry-couple">+</button>
+              </div>
+              <button type="button" class="plan-choose-btn" data-tiffin-choose="curry-couple">Choose Plan</button>
+            </div>
           </article>
           <article class="plan-card" data-tiffin-plan="curry-family" data-tiffin-price="200">
             <div class="plan-top"><span>Family</span><strong>$200</strong></div>
             <p>Curry-only 20-day package</p>
             <ul><li>16 oz dal</li><li>16 oz curry</li><li>Monday–Friday service</li></ul>
+            <div class="plan-actions">
+              <div class="qty-control">
+                <button type="button" class="qty-minus" data-tiffin-action="decrease" data-tiffin-plan="curry-family">−</button>
+                <span class="qty-value" data-tiffin-qty="curry-family">0</span>
+                <button type="button" class="qty-plus" data-tiffin-action="increase" data-tiffin-plan="curry-family">+</button>
+              </div>
+              <button type="button" class="plan-choose-btn" data-tiffin-choose="curry-family">Choose Plan</button>
+            </div>
           </article>
         </div>
 
@@ -1028,7 +1052,7 @@
           <p>Use this quick form to prepare a WhatsApp message. No account or online payment is required.</p>
           <div class="contact-methods">
             <a href="tel:+16725881282"><span>☎</span><div><small>Call</small><strong>+1 672-588-1282</strong></div></a>
-            <a href="mailto:sattwikkitchen30@gmail.com"><span>✉</span><div><small>Email</small><strong>sattwikkitchen30@gmail.com</strong></div></a>
+            <a href="mailto:sattwikkitchen@gmail.com"><span>✉</span><div><small>Email</small><strong>sattwikkitchen@gmail.com</strong></div></a>
           </div>
         </div>
 
@@ -1060,9 +1084,9 @@
       <div><img class="footer-logo" src="https://res.cloudinary.com/spfurewl/image/upload/v1789330411/sattwik-logo.png" alt="Sattwik Kitchen logo" /><p>Pure vegetarian, home-style food made for the Metro Vancouver community.</p></div>
       <div><strong>Menus</strong><a href="https://www.facebook.com/share/14NusKLjLYf/" target="_blank" rel="noopener">Tiffins</a><a href="https://www.facebook.com/share/16mLzNVAoX/" target="_blank" rel="noopener">Sweets</a><a href="https://www.facebook.com/share/17XLFct67d/" target="_blank" rel="noopener">Snacks</a><a href="https://www.facebook.com/marketplace/item/1599924425047230/" target="_blank" rel="noopener">Pickles & Powders</a></div>
       <div><strong>Follow</strong><a href="https://www.facebook.com/profile.php?id=61581806512999" target="_blank" rel="noopener">Facebook</a><a href="https://www.instagram.com/sattwikkitchen/" target="_blank" rel="noopener">Instagram</a><a href="https://whatsapp.com/channel/0029VbCtjCo0lwgwiBOTxh3n" target="_blank" rel="noopener">WhatsApp Channel</a></div>
-      <div><strong>Contact</strong><a href="tel:+16725881282">+1 672-588-1282</a><a href="mailto:sattwikkitchen19@gmail.com">sattwikkitchen19@gmail.com</a><span>Burnaby • New Westminster • Surrey • Delta</span></div>
+      <div><strong>Contact</strong><a href="tel:+16725881282">+1 672-588-1282</a><a href="mailto:sattwikkitchen@gmail.com">sattwikkitchen@gmail.com</a><span>Burnaby • New Westminster • Surrey • Delta</span></div>
     </div>
-    <div class="container footer-bottom"><div class="footer-bottom-brand"><span>© <span id="year"></span> Sattwik Kitchen</span><span>Pure Vegetarian • Food Like Home</span></div><span>Made by <a href="https://www.trontechlabs.com/softwaredev" target="_blank" rel="noopener noreferrer">Trontechlabs</a></span></div>
+    <div class="container footer-bottom"><div class="footer-bottom-brand"><span>© <span id="year"></span> Sattwik Kitchen</span><span>Pure Vegetarian • Food Like Home</span></div><span>Powered by <a href="https://www.trontechlabs.com/softwaredev" target="_blank" rel="noopener noreferrer">Trontech</a></span></div>
   </footer>
 
   <a class="whatsapp-float" href="https://wa.me/16725881282?text=Hi%20Sattwik%20Kitchen%2C%20I%27d%20like%20to%20place%20an%20order." target="_blank" rel="noopener" aria-label="Order on WhatsApp">✆ <span>Order</span></a>
@@ -1095,6 +1119,7 @@
           <label>Phone number<input id="customerPhone" type="tel" autocomplete="tel" required placeholder="+1 604 555 0123" /></label>
           <label>Email<input id="customerEmail" type="email" autocomplete="email" required placeholder="name@example.com" /></label>
           <label>Area<input id="customerArea" type="text" autocomplete="address-level2" required placeholder="e.g. Surrey, Burnaby" /></label>
+          <label id="pickupDateField" hidden>Pickup Date<input id="pickupDate" type="date" /></label>
         </div>
         <p class="customer-form-status" id="customerFormStatus" aria-live="polite">Add an item to the cart and complete all fields to send your enquiry.</p>
         <button class="btn btn-whatsapp" id="sendCartWhatsApp" type="submit" disabled>Place Order</button>

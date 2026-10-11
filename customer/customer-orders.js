@@ -38,12 +38,45 @@ function pickupStatusForOrder(order, pickupItems, deliveryItems) {
       : pickupStatuses[0] || (deliveryItems.length ? 'PENDING' : String(order.status || 'PENDING').toUpperCase());
   if (rawStatus === 'CANCELLED') return 'CANCELLED';
   if (rawStatus === 'DELIVERED') return 'DELIVERED';
-  if (rawStatus === 'OUT_FOR_DELIVERY') return rawStatus;
   if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY'].includes(rawStatus)) return 'ACCEPTED';
   return 'PENDING';
 }
 function pickupStatusLabel(status) {
-  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Delivered', CANCELLED: 'Cancelled' })[status] || status;
+  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', DELIVERED: 'Delivered', CANCELLED: 'Cancelled' })[status] || status;
+}
+function tiffinPlanName(item, order, deliveryItems) {
+  const identifiers = [
+    item.packageType,
+    item.planType,
+    item.planName,
+    item.planId,
+    item.productName
+  ].filter(Boolean).join(' ').toLowerCase();
+  const packageType = /curry[\s_-]*only/.test(identifiers)
+    ? 'Curry-Only'
+    : /\bfull(?:[\s_-]*meal)?\b/.test(identifiers)
+      ? 'Full Meal'
+      : deliveryItems.length === 1
+        ? ({ full: 'Full Meal', 'curry-only': 'Curry-Only' })[String(order.tiffinPlan?.packageType || '').toLowerCase()]
+        : '';
+  const savedSize = String(item.size || item.planSize || item.productName || '').match(/\b(single|couple|family)\b/i)?.[1]
+    || (deliveryItems.length === 1 ? order.tiffinPlan?.size : '');
+  const size = savedSize
+    ? `${savedSize[0].toUpperCase()}${savedSize.slice(1).toLowerCase()}`
+    : '';
+  return packageType && size
+    ? `${packageType} - ${size}`
+    : size || 'Tiffin Plan';
+}
+function orderItemSummary(order, pickupItems, deliveryItems) {
+  if (order.type === 'tiffin' && deliveryItems.length) {
+    return deliveryItems
+      .map((item) => `${tiffinPlanName(item, order, deliveryItems)} × ${Number(item.quantity) || 0}`)
+      .join(', ');
+  }
+  return pickupItems
+    .map((item) => `${item.productName} × ${Number(item.quantity) || 0}`)
+    .join(', ');
 }
 function escapeHtml(value) {
   return String(value ?? '')
@@ -64,7 +97,7 @@ function renderTimeline(steps, currentStatus) {
   }).join('')}</div>`;
 }
 function renderPickupTimeline(status) {
-  const steps = status === 'CANCELLED' ? ['PENDING', 'CANCELLED'] : ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
+  const steps = status === 'CANCELLED' ? ['PENDING', 'CANCELLED'] : ['PENDING', 'ACCEPTED', 'DELIVERED'];
   const currentIndex = steps.indexOf(status);
   return `<div class="timeline">${steps.map((step, index) => {
     const complete = index < currentIndex || (step === 'DELIVERED' && status === 'DELIVERED');
@@ -79,6 +112,12 @@ function renderOrder(order) {
   const pickupStatus = pickupStatusForOrder(order, pickupItems, deliveryItems);
   const isTiffinOrder = order.type === 'tiffin' && deliveryItems.length > 0;
   const isPickupOnlyOrder = pickupItems.length > 0 && deliveryItems.length === 0;
+  const itemSummary = escapeHtml(orderItemSummary(order, pickupItems, deliveryItems));
+  const fulfillmentLabel = pickupItems.length && deliveryItems.length
+    ? 'Pickup and delivery'
+    : deliveryItems.length
+      ? 'Delivery'
+      : 'Pickup';
   const currentStatus = isPickupOnlyOrder ? pickupStatus : String(order.status || 'PENDING').toUpperCase();
   const cancelDisabled = ['DELIVERED', 'CANCELLED'].includes(currentStatus) || Boolean(order.firstDeliveredAt || order.deliveredAt);
   const deliveryTracking = deliveryItems.length || !pickupItems.length ? renderTimeline(deliveryStatusSteps, order.status) : '';
@@ -88,6 +127,8 @@ function renderOrder(order) {
         <dl class="pickup-order-details">
           <div><dt>Pickup Date</dt><dd>${pickupDateLabel(order.pickupDate)}</dd></div>
           <div><dt>Order Date</dt><dd>${dateLabel(order.placedAt || order.createdAt)}</dd></div>
+          <div><dt>Fulfillment</dt><dd>Pickup</dd></div>
+          <div><dt>Items</dt><dd>${itemSummary}</dd></div>
           <div><dt>Status</dt><dd>${pickupStatusLabel(pickupStatus)}</dd></div>
           <div><dt>Amount</dt><dd>${money(order.totalAmount)}</dd></div>
         </dl>
@@ -102,14 +143,8 @@ function renderOrder(order) {
   const subscriptionText = isPickupOnlyOrder
     ? ''
     : hasDeliveryDateRange
-      ? `<div class="order-meta"><strong>Order ID:</strong> ${order.orderId}<br><strong>Plan:</strong> ${items.map((item) => item.productName).join(', ') || 'Tiffin Plan'}<br><strong>Type:</strong> ${order.type}<br><strong>Start Date:</strong> ${orderDateLabel(subscriptionStart)}<br><strong>End Date:</strong> ${orderDateLabel(subscriptionEnd)}<br><strong>Amount:</strong> ${money(order.totalAmount)}</div>`
-      : `<div class="order-meta"><strong>Order ID:</strong> ${order.orderId}<br><strong>Amount:</strong> ${money(order.totalAmount)}</div>`;
-  const preparationItems = isTiffinOrder && Array.isArray(order.tiffinItems)
-    ? `<section class="order-preparation-items">
-        <h3>Order items</h3>
-        <ul>${order.tiffinItems.map((item) => `<li>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</li>`).join('')}</ul>
-      </section>`
-    : '';
+      ? `<div class="order-meta"><strong>Order ID:</strong> ${escapeHtml(order.orderId)}<br><strong>Order Date:</strong> ${dateLabel(order.placedAt || order.createdAt)}<br><strong>Type:</strong> ${escapeHtml(order.type || 'tiffin')}<br><strong>Fulfillment:</strong> ${fulfillmentLabel}<br><strong>Items:</strong> ${itemSummary}<br><strong>Start Date:</strong> ${orderDateLabel(subscriptionStart)}<br><strong>End Date:</strong> ${orderDateLabel(subscriptionEnd)}<br><strong>Amount:</strong> ${money(order.totalAmount)}</div>`
+      : `<div class="order-meta"><strong>Order ID:</strong> ${escapeHtml(order.orderId)}<br><strong>Order Date:</strong> ${dateLabel(order.placedAt || order.createdAt)}<br><strong>Type:</strong> ${escapeHtml(order.type || 'product')}<br><strong>Fulfillment:</strong> ${fulfillmentLabel}<br><strong>Items:</strong> ${itemSummary}<br><strong>Amount:</strong> ${money(order.totalAmount)}</div>`;
   const confirmedCustomer = order.customer || {};
   const customerDetails = confirmedCustomer.firstName || confirmedCustomer.lastName || confirmedCustomer.phone || confirmedCustomer.email
     ? `<div class="order-address"><strong>Order contact</strong><br>${escapeHtml([confirmedCustomer.firstName, confirmedCustomer.lastName].filter(Boolean).join(' '))}<br>${escapeHtml(confirmedCustomer.phone || '')}<br>${escapeHtml(confirmedCustomer.email || '')}${confirmedCustomer.address || confirmedCustomer.area ? `<br>${escapeHtml(confirmedCustomer.address || confirmedCustomer.area)}` : ''}</div>`
@@ -125,16 +160,9 @@ function renderOrder(order) {
       </div>
       ${subscriptionText}
       ${deliveryStartText}
-      ${preparationItems}
       ${deliveryTracking}
       ${pickupTracking}
       ${customerDetails}
-      ${isPickupOnlyOrder
-        ? `<section class="pickup-products">
-            <h3>Products</h3>
-            <ul>${pickupItems.map((item) => `<li><span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span></li>`).join('')}</ul>
-          </section>`
-        : `<div class="order-items">${items.map((item) => `<div class="order-item"><span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span><strong>${money(item.subtotal)}</strong></div>`).join('')}</div>`}
       ${(deliveryItems.length || !pickupItems.length) && order.deliveryAddress ? `<div class="order-address"><strong>Delivery address</strong><br>${escapeHtml(order.deliveryAddress)}</div>` : ''}
       <div class="order-actions"><button type="button" class="cancel-order-btn" data-cancel-order="${escapeHtml(order._id)}" ${cancelDisabled ? 'disabled aria-disabled="true"' : ''}>Cancel Order</button></div>
     </article>

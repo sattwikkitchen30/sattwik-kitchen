@@ -6,6 +6,7 @@
   <title>Customer Sign In | Sattwik Kitchen</title>
   <link rel="stylesheet" href="../styles.css" />
   <link rel="stylesheet" href="customer.css" />
+  <link rel="stylesheet" href="/password-toggle.css" />
 </head>
 <body class="customer-page">
   <main class="customer-shell">
@@ -16,7 +17,7 @@
         <p class="eyebrow">WELCOME BACK</p><h1>Sign in to place your order</h1><p class="muted">Your cart will stay saved while you sign in.</p>
         <form id="signinForm" class="customer-form">
           <label>Email<input id="signinEmail" type="email" required autocomplete="email" /></label>
-          <label>Password<input id="signinPassword" type="password" required autocomplete="current-password" /></label>
+          <label>Password<span class="password-input-wrap"><input id="signinPassword" type="password" required autocomplete="current-password" /><button class="password-toggle" type="button" data-password-toggle aria-label="Show password" aria-pressed="false" title="Show password"><svg class="eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg><svg class="eye-off-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8"></path><path d="M9.9 5.2A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a15.8 15.8 0 0 1-3.1 3.8M6.2 6.2C3.5 8.1 2 12 2 12s3.6 7 10 7c1 0 1.9-.2 2.8-.5"></path></svg></button></span></label>
           <button class="btn btn-primary" type="submit">Sign in</button>
         </form>
       </section>
@@ -26,7 +27,7 @@
           <label>Full name<input id="signupName" type="text" required autocomplete="name" /></label>
           <label>Email<input id="signupEmail" type="email" required autocomplete="email" /></label>
           <label>Phone<input id="signupPhone" type="tel" required autocomplete="tel" /></label>
-          <label>Password<input id="signupPassword" type="password" required minlength="8" autocomplete="new-password" /></label>
+          <label>Password<span class="password-input-wrap"><input id="signupPassword" type="password" required minlength="8" autocomplete="new-password" /><button class="password-toggle" type="button" data-password-toggle aria-label="Show password" aria-pressed="false" title="Show password"><svg class="eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg><svg class="eye-off-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8"></path><path d="M9.9 5.2A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a15.8 15.8 0 0 1-3.1 3.8M6.2 6.2C3.5 8.1 2 12 2 12s3.6 7 10 7c1 0 1.9-.2 2.8-.5"></path></svg></button></span></label>
           <button class="btn btn-primary" type="submit">Create account</button>
         </form>
       </section>
@@ -34,6 +35,7 @@
       <a class="back-link" href="/">← Back to menu</a>
     </div>
   </main>
+  <script src="/password-toggle.js"></script>
   <script src="customer.js"></script>
 </body>
 </html>

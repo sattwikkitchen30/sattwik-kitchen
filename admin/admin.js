@@ -1,6 +1,6 @@
 const API_PREFIX = '/api';
 let token = localStorage.getItem('sattwikToken') || '';
-let state = { overview: null, orders: [], products: [], customers: [], custom: null, ordersFulfillment: 'delivery' };
+let state = { overview: null, orders: [], products: [], customers: [], custom: null, ordersFulfillment: 'delivery', ordersRequestId: 0 };
 let tiffinEditorOrder = null;
 let tiffinEditorItems = [];
 let tiffinEditorProducts = [];
@@ -148,6 +148,15 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
   document.getElementById('typeFilter')?.addEventListener('change', loadDashboardData);
   document.getElementById('fromDate')?.addEventListener('change', loadDashboardData);
   document.getElementById('toDate')?.addEventListener('change', loadDashboardData);
+  document.getElementById('ordersCreatedDate')?.addEventListener('change', renderOrdersTable);
+  document.getElementById('ordersSearch')?.addEventListener('input', scheduleOrdersSearch);
+  document.getElementById('ordersFilterReset')?.addEventListener('click', () => {
+    const date = document.getElementById('ordersCreatedDate');
+    const search = document.getElementById('ordersSearch');
+    if (date) date.value = '';
+    if (search) search.value = '';
+    renderOrdersTable();
+  });
   document.querySelectorAll('[data-fulfillment-tab]').forEach((button) => button.addEventListener('click', async () => {
     state.ordersFulfillment = button.dataset.fulfillmentTab;
     document.querySelectorAll('[data-fulfillment-tab]').forEach((tab) => {
@@ -155,8 +164,12 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
       tab.classList.toggle('active', active);
       tab.setAttribute('aria-selected', active ? 'true' : 'false');
     });
+    const dateLabel = document.getElementById('ordersDateLabel');
+    if (dateLabel) dateLabel.textContent = state.ordersFulfillment === 'delivery' ? 'Delivery start date' : 'Pickup date';
     await renderOrdersTable();
   }));
+  const dateLabel = document.getElementById('ordersDateLabel');
+  if (dateLabel) dateLabel.textContent = state.ordersFulfillment === 'delivery' ? 'Delivery start date' : 'Pickup date';
 
 }
 
@@ -174,12 +187,13 @@ function pickupStatusForOrder(order, items) {
   const rawStatus = String(items.find((item) => item.fulfillment === 'pickup')?.deliveryStatus || (order.fulfillment === 'pickup' ? order.status : 'PENDING')).toUpperCase();
   if (rawStatus === 'CANCELLED') return 'CANCELLED';
   if (rawStatus === 'DELIVERED') return 'DELIVERED';
-  if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY'].includes(rawStatus)) return 'ACCEPTED';
+  if (rawStatus === 'OUT_FOR_DELIVERY') return rawStatus;
+  if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY'].includes(rawStatus)) return 'ACCEPTED';
   return 'PENDING';
 }
 
 function pickupStatusLabel(status) {
-  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', DELIVERED: 'Pickup Completed', CANCELLED: 'Cancelled' })[status] || status;
+  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Pickup Completed', CANCELLED: 'Cancelled' })[status] || status;
 }
 
 function deliveryStatusLabel(status) {
@@ -192,17 +206,18 @@ function deliveryStatusLabel(status) {
   })[status] || status;
 }
 
-function renderDeliveryStatusOptions(status, includeCancelled = false) {
+function renderDeliveryStatusOptions(status, includeCancelled = false, canCancel = true) {
   const values = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
   if (includeCancelled) values.push('CANCELLED');
-  return values.map((value) => `<option value="${value}" ${status === value ? 'selected' : ''}>${deliveryStatusLabel(value)}</option>`).join('');
+  return values.map((value) => `<option value="${value}" ${status === value ? 'selected' : ''} ${value === 'CANCELLED' && (!canCancel || ['DELIVERED', 'CANCELLED'].includes(status)) ? 'disabled' : ''}>${deliveryStatusLabel(value)}</option>`).join('');
 }
 
-function renderPickupStatusControl(orderId, status) {
-  const options = ['PENDING', 'ACCEPTED', 'DELIVERED', 'CANCELLED']
-    .map((value) => `<option value="${value}" ${value === status ? 'selected' : ''}>${pickupStatusLabel(value)}</option>`)
+function renderPickupStatusControl(orderId, status, canCancel = true) {
+  const options = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED']
+    .map((value) => `<option value="${value}" ${value === status ? 'selected' : ''} ${value === 'CANCELLED' && (!canCancel || ['DELIVERED', 'CANCELLED'].includes(status)) ? 'disabled' : ''}>${pickupStatusLabel(value)}</option>`)
     .join('');
-  return `<select class="pickup-status-select" data-order-id="${orderId}" data-current-status="${status}">${options}</select>`;
+  const disabled = ['DELIVERED', 'CANCELLED'].includes(status) ? 'disabled' : '';
+  return `<select class="pickup-status-select" data-order-id="${orderId}" data-current-status="${status}" ${disabled}>${options}</select>`;
 }
 
 function dateLabel(date) {
@@ -273,6 +288,12 @@ function parseFilters() {
   return params;
 }
 
+let ordersSearchTimer;
+function scheduleOrdersSearch() {
+  clearTimeout(ordersSearchTimer);
+  ordersSearchTimer = setTimeout(renderOrdersTable, 250);
+}
+
 async function loadDashboardData() {
   try {
     const params = parseFilters();
@@ -293,7 +314,7 @@ async function loadDashboardData() {
     renderTopProducts(products);
     renderCustomerInsights(customers);
     renderCustomTable(custom);
-    renderOrdersTable();
+    await renderOrdersTable();
     renderProductsTable();
     await renderCustomersTable();
     await renderDeliveryMembersTable();
@@ -582,7 +603,27 @@ function renderCustomerInsights(customers) {
 async function renderOrdersTable() {
   const params = parseFilters();
   params.set('fulfillment', state.ordersFulfillment || 'delivery');
-  const data = await api(`/orders?${params.toString()}`);
+  const requestId = ++state.ordersRequestId;
+  const dateValue = document.getElementById('ordersCreatedDate')?.value || '';
+  const searchValue = document.getElementById('ordersSearch')?.value.trim() || '';
+  if (dateValue) params.set('orderDate', dateValue);
+  if (searchValue) params.set('search', searchValue);
+  const filterActive = Boolean(dateValue || searchValue);
+  params.set('page', '1');
+  params.set('limit', '100');
+  const firstPage = await api(`/orders?${params.toString()}`);
+  const orders = firstPage.orders || [];
+  if (filterActive && firstPage.pages > 1) {
+    const remainingPages = [];
+    for (let page = 2; page <= firstPage.pages; page += 1) {
+      const pageParams = new URLSearchParams(params);
+      pageParams.set('page', String(page));
+      remainingPages.push(api(`/orders?${pageParams.toString()}`));
+    }
+    const pages = await Promise.all(remainingPages);
+    pages.forEach((result) => orders.push(...(result.orders || [])));
+  }
+  if (requestId !== state.ordersRequestId) return;
   let deliveryMembers = [];
   if (state.ordersFulfillment === 'delivery') try {
     const deliveryMembersData = await api('/delivery-members');
@@ -590,11 +631,13 @@ async function renderOrdersTable() {
   } catch (error) {
     console.error('Failed to load delivery members:', error);
   }
-  const orders = data.orders || [];
+  if (requestId !== state.ordersRequestId) return;
   const table = document.getElementById('ordersTable');
+  const resultCount = document.getElementById('ordersResultCount');
+  if (resultCount) resultCount.textContent = `${orders.length} ${orders.length === 1 ? 'order' : 'orders'} found`;
   const headers = state.ordersFulfillment === 'delivery'
     ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Start Date', 'End Date', 'Delivery Member', 'Amount', 'Status']
-    : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Pickup Date', 'Status', 'Section total'];
+    : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Pickup Date', 'Status', 'Amount'];
 
   table.innerHTML = `
     <table>
@@ -609,11 +652,15 @@ async function renderOrdersTable() {
           const pickupStatus = pickupStatusForOrder(order, items);
           const customer = order.customerDoc || {};
           const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
+          const canCancel = !order.firstDeliveredAt && !order.deliveredAt;
           const isTiffinDelivery = order.type === 'tiffin' && items.some((item) => item.fulfillment === 'delivery');
 
           if (state.ordersFulfillment === 'delivery' && isTiffinDelivery) {
-            const matchedItem = items.find((item) => item.fulfillment === 'delivery');
-            const itemName = matchedItem?.productName || (
+            const deliveryPlanItems = items.filter((item) => item.fulfillment === 'delivery');
+            const itemNames = deliveryPlanItems.map((item) => (
+              `${escHtml(item.productName || 'Tiffin Plan')} × ${Number(item.quantity) || 0}`
+            )).join('<br>');
+            const itemDetails = itemNames || (
               order.tiffinPlan?.packageType
                 ? `${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'} Package`
                 : 'Tiffin Plan'
@@ -622,13 +669,13 @@ async function renderOrdersTable() {
             const startDate = order.subscriptionStartDate;
             const endDate = order.subscriptionEndDate || order.createdAt;
             const rowState = getTiffinRowState(startDate, endDate);
-            const amount = currency(order.totalAmount || (order.tiffinPlan?.price || 0));
+            const amountEditor = renderOrderAmountEditor(order);
             return `
               <tr class="${rowState}" data-order-id="${order._id}">
-                <td>${order.orderId}</td>
-                <td><strong>${customerName}</strong></td>
-                <td>${customer.phone || '—'}<br>${customer.email || '—'}</td>
-                <td>${escHtml(itemName)}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Edit Items</button></td>
+                <td>${escHtml(order.orderId)}</td>
+                <td><strong>${escHtml(customerName)}</strong></td>
+                <td>${escHtml(customer.phone || '—')}<br>${escHtml(customer.email || '—')}<br><strong>Address:</strong> ${escHtml(order.deliveryAddress || customer.address || customer.area || '—')}</td>
+                <td>${itemDetails}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Edit Items</button></td>
                 <td>${order.type}</td>
                 <td>
                   <div class="tiffin-end-date-cell">
@@ -648,19 +695,22 @@ async function renderOrdersTable() {
                     ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${member.name}</option>`).join('')}
                   </select>
                 </td>
-                <td>${amount}</td>
+                <td>${amountEditor}</td>
                 <td>
-                  <select class="tiffin-status-select order-status-select" data-order-id="${order._id}" data-current-status="${tiffinStatus}">
-                    ${renderDeliveryStatusOptions(tiffinStatus)}
+                  <select class="tiffin-status-select order-status-select" data-order-id="${order._id}" data-current-status="${tiffinStatus}" ${['DELIVERED', 'CANCELLED'].includes(tiffinStatus) ? 'disabled' : ''}>
+                    ${renderDeliveryStatusOptions(tiffinStatus, true, canCancel)}
                   </select>
                 </td>
               </tr>
             `;
           }
 
-          const itemDetails = items.map((it) => `${it.productName} × ${it.quantity} — ${currency(it.priceAtPurchase)} each; ${currency(it.subtotal)} (${it.fulfillment === 'delivery' ? 'Delivery' : 'Pickup'})`).join('<br>');
+          const itemDetails = items.map((it) => `${escHtml(it.productName)} × ${Number(it.quantity) || 0} — ${currency(it.priceAtPurchase)} each; ${currency(it.subtotal)} (${it.fulfillment === 'delivery' ? 'Delivery' : 'Pickup'})`).join('<br>');
           const orderDetails = [itemDetails, order.customRequest ? `Custom request: ${order.customRequest}` : ''].filter(Boolean).join('<br>') || '—';
-          const deliveryAddress = state.ordersFulfillment === 'delivery' ? `<br><strong>Address:</strong> ${escHtml(order.deliveryAddress || customer.address || customer.area || '—')}` : '<br><strong>Pickup:</strong> Customer pickup';
+          const savedLocation = order.deliveryAddress || customer.address || customer.area || '—';
+          const deliveryAddress = state.ordersFulfillment === 'delivery'
+            ? `<br><strong>Address:</strong> ${escHtml(savedLocation)}`
+            : `<br><strong>Location:</strong> ${escHtml(savedLocation)}`;
           const escapedCustomerName = escHtml(customerName);
           const escapedPhone = escHtml(customer.phone || '—');
           const escapedEmail = escHtml(customer.email || '—');
@@ -672,24 +722,24 @@ async function renderOrdersTable() {
             </select></td>` : '';
           return `
           <tr>
-            <td>${order.orderId}</td>
+            <td>${escHtml(order.orderId)}</td>
             ${state.ordersFulfillment === 'delivery'
               ? `<td><strong>${escapedCustomerName}</strong></td><td>${escapedPhone}<br>${escapedEmail}${deliveryAddress}</td>`
               : `<td><strong>${escapedCustomerName}</strong><br>${escapedPhone}<br>${escapedEmail}${deliveryAddress}</td>`}
             <td>${orderDetails}</td>
             <td>${order.type}</td>
             ${state.ordersFulfillment === 'delivery'
-              ? `<td><div class="tiffin-end-date-cell"><input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${order.subscriptionStartDate ? getDateInputValue(order.subscriptionStartDate) : ''}" /><button class="delivery-start-date-save" data-order-id="${order._id}">Save</button></div></td><td><div class="tiffin-end-date-cell"><input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${order.subscriptionEndDate ? getDateInputValue(order.subscriptionEndDate) : ''}" /><button class="delivery-end-date-save" data-order-id="${order._id}">Save</button></div></td>${deliveryAssignment}<td>${currency(order.totalAmount)}</td>`
+              ? `<td><div class="tiffin-end-date-cell"><input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${order.subscriptionStartDate ? getDateInputValue(order.subscriptionStartDate) : ''}" /><button class="delivery-start-date-save" data-order-id="${order._id}">Save</button></div></td><td><div class="tiffin-end-date-cell"><input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${order.subscriptionEndDate ? getDateInputValue(order.subscriptionEndDate) : ''}" /><button class="delivery-end-date-save" data-order-id="${order._id}">Save</button></div></td>${deliveryAssignment}<td>${renderOrderAmountEditor(order)}</td>`
               : `<td>Pickup</td><td>${orderDateTime}</td><td><div class="tiffin-end-date-cell pickup-date-editor" data-order-id="${order._id}"><input type="date" class="pickup-date-input" data-order-id="${order._id}" value="${order.pickupDate ? getDateInputValue(order.pickupDate) : ''}" /><button type="button" class="pickup-date-save" data-order-id="${order._id}">Save</button></div></td>`}
             <td>
-              ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}">
-                ${renderDeliveryStatusOptions(order.status, true)}
-              </select><span class="badge ${String(order.status).toLowerCase()}">${deliveryStatusLabel(order.status)}</span>` : renderPickupStatusControl(order._id, pickupStatus)}
+              ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}" ${['DELIVERED', 'CANCELLED'].includes(String(order.status).toUpperCase()) ? 'disabled' : ''}>
+                ${renderDeliveryStatusOptions(order.status, true, canCancel)}
+              </select><span class="badge ${String(order.status).toLowerCase()}">${deliveryStatusLabel(order.status)}</span>` : renderPickupStatusControl(order._id, pickupStatus, canCancel)}
             </td>
-            ${state.ordersFulfillment === 'pickup' ? `<td>${currency(order.totalAmount)}</td>` : ''}
+            ${state.ordersFulfillment === 'pickup' ? `<td>${renderOrderAmountEditor(order)}</td>` : ''}
           </tr>
         `;
-        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 10 : 9}">No ${state.ordersFulfillment} orders found.</td></tr>`}
+        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 10 : 9}">No ${state.ordersFulfillment} orders match the selected filters.</td></tr>`}
       </tbody>
     </table>
   `;
@@ -699,6 +749,29 @@ async function renderOrdersTable() {
       await openTiffinItemsEditor(button.dataset.orderId);
     } catch (error) {
       showAdminToast(error.message || 'Could not open tiffin order items.');
+    }
+  }));
+
+  table.querySelectorAll('.order-amount-save').forEach((button) => button.addEventListener('click', async () => {
+    const input = table.querySelector(`.order-amount-input[data-order-id="${button.dataset.orderId}"]`);
+    const amount = Number(input?.value);
+    if (!input || input.value.trim() === '' || !Number.isFinite(amount) || amount < 0) {
+      showAdminToast('Enter a valid non-negative order amount.');
+      return;
+    }
+
+    button.disabled = true;
+    try {
+      await api(`/orders/${button.dataset.orderId}/amount`, {
+        method: 'PUT',
+        body: JSON.stringify({ amount })
+      });
+      showAdminToast('Order amount saved successfully.');
+      await loadDashboardData();
+    } catch (error) {
+      showAdminToast(error.message || 'Could not save order amount.');
+    } finally {
+      button.disabled = false;
     }
   }));
 
@@ -742,6 +815,10 @@ async function renderOrdersTable() {
 
   table.querySelectorAll('.order-status-select').forEach((select) => select.addEventListener('change', async () => {
     const previous = select.dataset.currentStatus;
+    if (select.value === 'CANCELLED' && !window.confirm('Are you sure you want to cancel this order?')) {
+      select.value = previous;
+      return;
+    }
     if (select.value === 'OUT_FOR_DELIVERY') {
       const memberSelect = table.querySelector(`.delivery-member-select[data-order-id="${select.dataset.orderId}"]`);
       if (!memberSelect?.value) {
@@ -774,6 +851,10 @@ async function renderOrdersTable() {
   }));
   table.querySelectorAll('.pickup-status-select').forEach((select) => select.addEventListener('change', async () => {
     const previous = select.dataset.currentStatus;
+    if (select.value === 'CANCELLED' && !window.confirm('Are you sure you want to cancel this order?')) {
+      select.value = previous;
+      return;
+    }
     try {
       await api(`/orders/${select.dataset.orderId}/status`, { method: 'PUT', body: JSON.stringify({ status: select.value, fulfillment: 'pickup' }) });
       await loadDashboardData();
@@ -798,6 +879,17 @@ async function renderOrdersTable() {
   }));
 }
 
+function renderOrderAmountEditor(order) {
+  const amount = Number(order.orderAmount ?? order.totalAmount ?? order.tiffinPlan?.price ?? 0);
+  return `
+    <div class="order-amount-editor">
+      <span>${currency(amount)}</span>
+      <input class="order-amount-input" type="number" min="0" step="0.01" value="${amount.toFixed(2)}" data-order-id="${order._id}" aria-label="Order amount" />
+      <button type="button" class="order-amount-save" data-order-id="${order._id}">Save</button>
+    </div>
+  `;
+}
+
 async function openTiffinItemsEditor(orderId) {
   const [orderResponse, productsResponse] = await Promise.all([
     api(`/orders/${orderId}`),
@@ -815,17 +907,16 @@ async function openTiffinItemsEditor(orderId) {
 
   const customer = order.customer || {};
   const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
-  const packageItem = (order.items || []).find((item) => item.category === 'Tiffin Plans');
-  const packageType = order.tiffinPlan?.packageType === 'curry-only'
-    ? 'Curry-Only Package'
-    : order.tiffinPlan?.packageType === 'full'
-      ? 'Full Meal Package'
-      : packageItem?.productName || 'Tiffin Package';
-  const size = order.tiffinPlan?.size ? ` — ${order.tiffinPlan.size[0].toUpperCase()}${order.tiffinPlan.size.slice(1)}` : '';
+  const planItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
+  const packageSummary = planItems.length
+    ? planItems.map((item) => `${item.productName} × ${Number(item.quantity) || 0}`).join(', ')
+    : order.tiffinPlan?.packageType
+      ? `${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'} Package${order.tiffinPlan.size ? ` — ${order.tiffinPlan.size[0].toUpperCase()}${order.tiffinPlan.size.slice(1)}` : ''}`
+      : 'Tiffin Package';
   document.getElementById('tiffinItemsOrderSummary').innerHTML = `
     <div><strong>Order ID:</strong> ${escHtml(order.orderId || '—')}</div>
     <div><strong>Customer:</strong> ${escHtml(customerName)}</div>
-    <div><strong>Package:</strong> ${escHtml(packageType + size)}${packageItem?.quantity > 1 ? ` × ${Number(packageItem.quantity)}` : ''}</div>
+    <div><strong>Packages:</strong> ${escHtml(packageSummary)}</div>
     <div><strong>Start Date:</strong> ${escHtml(order.subscriptionStartDate || '—')}</div>
     <div><strong>End Date:</strong> ${escHtml(order.subscriptionEndDate || '—')}</div>
   `;
@@ -1103,6 +1194,11 @@ manualOrderForm?.addEventListener('submit', async (event) => {
   }
 });
 
+function displayProductCategory(category) {
+  const value = String(category || '').trim();
+  return /^tiffin$/i.test(value) || /^breakfast$/i.test(value) ? 'Breakfast' : value;
+}
+
 async function renderProductsTable() {
   const data = await api('/products/all');
   const products = data.products || [];
@@ -1111,7 +1207,7 @@ async function renderProductsTable() {
   // so the admin gets autocomplete suggestions when editing.
   const datalist = document.getElementById('existingCategoriesList');
   if (datalist) {
-    const cats = [...new Set(products.map((p) => p.category).filter(Boolean))].sort();
+    const cats = [...new Set(products.map((p) => displayProductCategory(p.category)).filter(Boolean))].sort();
     datalist.innerHTML = cats.map((c) => `<option value="${c}"></option>`).join('');
   }
 
@@ -1125,7 +1221,7 @@ async function renderProductsTable() {
         ${products.map((product) => `
           <tr data-product-id="${product._id}">
             <td>${escHtml(product.name)}</td>
-            <td>${escHtml(product.category)}</td>
+            <td>${escHtml(displayProductCategory(product.category))}</td>
             <td>${currency(product.price)}</td>
             <td>
               <input class="stock-input" data-product-id="${product._id}"
@@ -1281,11 +1377,12 @@ async function loadCategoriesForEditModal(currentCategory) {
     const products = data.products || [];
     
     // Extract unique categories (case-insensitive)
-    const categoryMap = new Map();
+    const categoryMap = new Map([['breakfast', 'Breakfast']]);
     products.forEach((product) => {
-      const normalized = product.category.toLowerCase().trim();
+      const category = displayProductCategory(product.category);
+      const normalized = category.toLowerCase();
       if (!categoryMap.has(normalized)) {
-        categoryMap.set(normalized, product.category); // Keep original casing
+        categoryMap.set(normalized, category);
       }
     });
     
@@ -1302,7 +1399,7 @@ async function loadCategoriesForEditModal(currentCategory) {
         const option = document.createElement('option');
         option.value = category;
         option.textContent = category;
-        if (category === currentCategory) {
+        if (category === displayProductCategory(currentCategory)) {
           option.selected = true;
         }
         select.appendChild(option);
@@ -1372,6 +1469,7 @@ document.getElementById('productEditForm')?.addEventListener('submit', async (e)
   } else {
     category = categorySelect;
   }
+  category = displayProductCategory(category);
 
   // Client-side validation
   if (!name) { msgEl.textContent = 'Product name is required.'; return; }
@@ -1514,11 +1612,12 @@ async function loadCategoriesForAddModal() {
     const products = data.products || [];
     
     // Extract unique categories (case-insensitive)
-    const categoryMap = new Map();
+    const categoryMap = new Map([['breakfast', 'Breakfast']]);
     products.forEach((product) => {
-      const normalized = product.category.toLowerCase().trim();
+      const category = displayProductCategory(product.category);
+      const normalized = category.toLowerCase();
       if (!categoryMap.has(normalized)) {
-        categoryMap.set(normalized, product.category); // Keep original casing
+        categoryMap.set(normalized, category);
       }
     });
     
@@ -1577,6 +1676,7 @@ document.getElementById('productAddForm')?.addEventListener('submit', async (e) 
   } else {
     category = categorySelect;
   }
+  category = displayProductCategory(category);
 
   // Client-side validation
   if (!name) { msgEl.textContent = 'Product name is required.'; return; }

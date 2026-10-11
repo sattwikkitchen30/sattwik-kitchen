@@ -1,7 +1,7 @@
 const DELIVERY_STATUSES = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'];
 const LEGACY_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'];
 const ORDER_STATUSES = [...DELIVERY_STATUSES, ...LEGACY_ORDER_STATUSES];
-const REVENUE_STATUSES = ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'confirmed', 'preparing', 'ready', 'delivered'];
+const REVENUE_STATUSES = ['DELIVERED', 'delivered'];
 const STATUS_TRANSITIONS = {
   PENDING: 'ACCEPTED',
   ACCEPTED: 'OUT_FOR_DELIVERY',
@@ -21,7 +21,7 @@ const TIFFIN_LABELS = {
 const TIFFIN_PREPARATION_RULES = {
   full: {
     single: { dal: 'small', curry: 'small', chapati: 4, rice: 1, curd: 'small' },
-    couple: { dal: 'medium', curry: 'medium', chapati: 4, rice: 1, curd: 'big' },
+    couple: { dal: 'medium', curry: 'medium', chapati: 4, rice: 1, curd: 'small' },
     family: { dal: 'large', curry: 'large', chapati: 6, rice: 1, curd: 'big' }
   },
   'curry-only': {

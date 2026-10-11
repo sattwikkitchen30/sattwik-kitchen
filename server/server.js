@@ -17,7 +17,7 @@ const httpServer = http.createServer(app);
 const io = new Server(httpServer, { cors: { origin: allowed } });
 app.set('io', io);
 
-connectDB();
+connectDB(app);
 
 app.use(cors({ origin: allowed }));
 app.use(express.json({ limit: '1mb' }));

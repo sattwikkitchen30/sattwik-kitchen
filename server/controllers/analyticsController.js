@@ -3,8 +3,9 @@ const Customer = require('../models/Customer');
 const Product = require('../models/Product');
 const TiffinSubscription = require('../models/TiffinSubscription');
 const TiffinMenuSelection = require('../models/TiffinMenuSelection');
-const { REVENUE_STATUSES, dateMatch, TIFFIN_MENU_BY_WEEKDAY } = require('../utils/constants');
+const { dateMatch, TIFFIN_MENU_BY_WEEKDAY } = require('../utils/constants');
 const { parseDateInput, formatDateKey, getWeekdayName, getMenuForDate, dateLabel, startOfDay, endOfDay, buildPreparationTotals, buildActivePlanCounts, syncExpiredTiffinSubscriptions } = require('../utils/tiffinPreparation');
+const { filterTiffinPreparationSubscriptions } = require('../utils/deliveryStatus');
 
 const money = (n) => Math.round((n || 0) * 100) / 100;
 
@@ -24,6 +25,16 @@ function basePipeline(query = {}) {
   return pipe;
 }
 
+function hasEverBeenDeliveredExpression() {
+  return {
+    $or: [
+      { $ne: [{ $ifNull: ['$firstDeliveredAt', null] }, null] },
+      { $ne: [{ $ifNull: ['$deliveredAt', null] }, null] },
+      { $in: ['$status', ['DELIVERED', 'delivered']] }
+    ]
+  };
+}
+
 function approvedPickupItemExpression(itemRef = '$$item') {
   const items = { $ifNull: ['$items', []] };
   const hasDeliveryItems = {
@@ -34,12 +45,12 @@ function approvedPickupItemExpression(itemRef = '$$item') {
       { $eq: [{ $ifNull: [`${itemRef}.fulfillment`, 'pickup'] }, 'pickup'] },
       {
         $or: [
-          { $eq: [`${itemRef}.deliveryStatus`, 'ACCEPTED'] },
+          { $eq: [`${itemRef}.deliveryStatus`, 'DELIVERED'] },
           {
             $and: [
               { $eq: [{ $ifNull: [`${itemRef}.deliveryStatus`, null] }, null] },
               { $eq: [hasDeliveryItems, false] },
-              { $in: ['$status', REVENUE_STATUSES] }
+              hasEverBeenDeliveredExpression()
             ]
           }
         ]
@@ -73,10 +84,10 @@ function revenueExpression() {
   const pickupItemTotal = { $sum: { $map: { input: pickupItems, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
   const hasPickupItems = { $in: ['pickup', { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.fulfillment', 'pickup'] } } }] };
   const hasDeliveryItems = { $in: ['delivery', { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.fulfillment', 'pickup'] } } }] };
-  const extraAmount = { $max: [0, { $subtract: [{ $ifNull: ['$totalAmount', 0] }, allItemTotal] }] };
+  const amountAdjustment = { $subtract: [{ $ifNull: ['$totalAmount', 0] }, allItemTotal] };
   const deliveryRevenue = {
     $cond: [
-      { $in: ['$status', REVENUE_STATUSES] },
+      hasEverBeenDeliveredExpression(),
       {
         $cond: [
           { $eq: [{ $size: items }, 0] },
@@ -84,7 +95,7 @@ function revenueExpression() {
           {
             $add: [
               deliveryItemTotal,
-              { $cond: [hasDeliveryItems, extraAmount, 0] }
+                { $cond: [hasDeliveryItems, amountAdjustment, 0] }
             ]
           }
         ]
@@ -95,15 +106,15 @@ function revenueExpression() {
   const pickupRevenue = {
     $add: [
       pickupItemTotal,
-      { $cond: [{ $and: [hasPickupItems, { $eq: [hasDeliveryItems, false] }, { $gt: [{ $size: pickupItems }, 0] }] }, extraAmount, 0] }
+      { $cond: [{ $and: [hasPickupItems, { $eq: [hasDeliveryItems, false] }, { $gt: [{ $size: pickupItems }, 0] }] }, amountAdjustment, 0] }
     ]
   };
-  return { $add: [deliveryRevenue, pickupRevenue] };
+  return { $max: [0, { $add: [deliveryRevenue, pickupRevenue] }] };
 }
 
 function revenueEligibleItemsExpression() {
   const items = { $ifNull: ['$items', []] };
-  return {
+  const eligibleItems = {
     $filter: {
       input: items,
       as: 'item',
@@ -113,8 +124,34 @@ function revenueEligibleItemsExpression() {
           {
             $and: [
               { $eq: [{ $ifNull: ['$$item.fulfillment', 'pickup'] }, 'delivery'] },
-              { $not: [{ $in: ['$status', ['CANCELLED', 'cancelled']] }] }
+              hasEverBeenDeliveredExpression()
             ]
+          }
+        ]
+      }
+    }
+  };
+  const allItemTotal = { $sum: { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
+  return {
+    $map: {
+      input: eligibleItems,
+      as: 'item',
+      in: {
+        $mergeObjects: [
+          '$$item',
+          {
+            revenueAmount: {
+              $cond: [
+                { $gt: [allItemTotal, 0] },
+                {
+                  $multiply: [
+                    { $ifNull: ['$totalAmount', 0] },
+                    { $divide: [{ $ifNull: ['$$item.subtotal', 0] }, allItemTotal] }
+                  ]
+                },
+                0
+              ]
+            }
           }
         ]
       }
@@ -231,7 +268,7 @@ async function products(req, res) {
           category: '$items.category'
         },
         quantity: { $sum: '$items.quantity' },
-        revenue: { $sum: '$items.subtotal' },
+        revenue: { $sum: '$items.revenueAmount' },
         orders: { $sum: 1 }
       }
     },
@@ -266,7 +303,7 @@ async function categories(req, res) {
       $group: {
         _id: '$items.category',
         quantity: { $sum: '$items.quantity' },
-        revenue: { $sum: '$items.subtotal' }
+        revenue: { $sum: '$items.revenueAmount' }
       }
     },
     { $sort: { revenue: -1 } }
@@ -356,18 +393,41 @@ async function orderStatus(req, res) {
 async function tiffins(req, res) {
   const rows = await Order.aggregate([
     ...basePipeline({ ...req.query, type: 'tiffin' }),
-    { $match: { status: { $ne: 'cancelled' } } },
-    { $unwind: '$items' },
-    { $match: { 'items.category': 'Tiffin Plans' } },
+    { $match: { $or: [
+      { firstDeliveredAt: { $ne: null } },
+      { deliveredAt: { $ne: null } },
+      { status: { $in: ['DELIVERED', 'delivered'] } }
+    ] } },
+    {
+      $set: {
+        planItems: {
+          $filter: {
+            input: { $ifNull: ['$items', []] },
+            as: 'item',
+            cond: { $eq: ['$$item.category', 'Tiffin Plans'] }
+          }
+        },
+        _allItemTotal: { $sum: { $map: { input: { $ifNull: ['$items', []] }, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } }
+      }
+    },
+    { $unwind: '$planItems' },
     {
       $group: {
         _id: {
           packageType: '$tiffinPlan.packageType',
           size: '$tiffinPlan.size',
-          name: '$items.productName'
+          name: '$planItems.productName'
         },
-        sold: { $sum: '$items.quantity' },
-        revenue: { $sum: '$items.subtotal' },
+        sold: { $sum: '$planItems.quantity' },
+        revenue: {
+          $sum: {
+            $cond: [
+              { $gt: ['$_allItemTotal', 0] },
+              { $multiply: [{ $ifNull: ['$totalAmount', 0] }, { $divide: [{ $ifNull: ['$planItems.subtotal', 0] }, '$_allItemTotal'] }] },
+              0
+            ]
+          }
+        },
         orders: { $sum: 1 }
       }
     },
@@ -470,10 +530,14 @@ async function tiffinPreparation(req, res) {
     status: { $ne: 'CANCELLED' },
     startDate: { $lte: endOfDay(selectedDate) },
     endDate: { $gte: startOfDay(selectedDate) }
-  }).populate('orderId', 'tiffinItems tiffinItemsCustomized tiffinPlan items').lean();
+  }).populate(
+    'orderId',
+    'tiffinItems tiffinItemsCustomized tiffinPlan items status subscriptionStartDate subscriptionEndDate deliveryStatusDate acceptedAt outForDeliveryAt deliveredAt'
+  ).lean();
+  const eligibleSubscriptions = filterTiffinPreparationSubscriptions(subscriptions, selectedDate);
 
-  const totals = buildPreparationTotals(subscriptions);
-  const activePlanCounts = buildActivePlanCounts(subscriptions);
+  const totals = buildPreparationTotals(eligibleSubscriptions);
+  const activePlanCounts = buildActivePlanCounts(eligibleSubscriptions);
 
   res.json({
     selectedDate: dateKey,
@@ -517,4 +581,7 @@ async function saveTiffinMenuSelection(req, res) {
   res.json({ message: 'Tiffin menu selection saved.', selection });
 }
 
-module.exports = { overview, revenue, products, categories, customers, orderStatus, tiffins, customOrders, tiffinPreparation, saveTiffinMenuSelection };
+module.exports = {
+  overview, revenue, products, categories, customers, orderStatus, tiffins, customOrders, tiffinPreparation, saveTiffinMenuSelection,
+  hasEverBeenDeliveredExpression, revenueExpression, revenueEligibleItemsExpression
+};

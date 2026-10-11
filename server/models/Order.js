@@ -20,10 +20,20 @@ const tiffinItemSchema = new mongoose.Schema({
   quantity: { type: Number, required: true, min: 1 }
 }, { _id: false });
 
+const customerSnapshotSchema = new mongoose.Schema({
+  firstName: { type: String, trim: true, default: '' },
+  lastName: { type: String, trim: true, default: '' },
+  phone: { type: String, trim: true, default: '' },
+  email: { type: String, trim: true, lowercase: true, default: '' },
+  address: { type: String, trim: true, default: '' },
+  area: { type: String, trim: true, default: '' }
+}, { _id: false });
+
 const orderSchema = new mongoose.Schema({
   orderId: { type: String, unique: true, index: true },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
   customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: false, index: true },
+  customerSnapshot: { type: customerSnapshotSchema, default: undefined },
   pickupDate: { type: Date, default: null },
   subscriptionStartDate: { type: Date, default: null, index: true },
   subscriptionEndDate: { type: Date, default: null, index: true },
@@ -45,6 +55,8 @@ const orderSchema = new mongoose.Schema({
   acceptedAt: { type: Date, default: null },
   outForDeliveryAt: { type: Date, default: null },
   deliveredAt: { type: Date, default: null },
+  firstDeliveredAt: { type: Date, default: null },
+  cancelledAt: { type: Date, default: null },
   deliveryStatusDate: { type: Date, default: null },
   status: { type: String, enum: ORDER_STATUSES, default: 'pending' },
   isDemo: { type: Boolean, default: false }

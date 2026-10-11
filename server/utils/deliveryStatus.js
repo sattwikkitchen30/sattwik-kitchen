@@ -20,9 +20,10 @@ function resolveDeliveryStatus(order, now = new Date()) {
   if (status === 'CANCELLED') return status;
 
   const serviceDates = getOrderServiceDates(order);
+  if (order?.type !== 'tiffin') return status;
   const todayKey = formatDateKey(now);
   const currentIndex = serviceDates.findIndex((date) => formatDateKey(date) === todayKey);
-  if (currentIndex <= 0 || !isServiceDay(now)) return status;
+  if (currentIndex < 0 || !isServiceDay(now)) return status;
 
   const recordedDate = order.deliveryStatusDate
     || (status === 'DELIVERED' ? order.deliveredAt : null)
@@ -53,10 +54,23 @@ function withCurrentDeliveryStatus(order, now = new Date()) {
   };
 }
 
+function isTiffinPreparationEligible(order, serviceDate) {
+  if (!order || String(order.status || '').toUpperCase() === 'CANCELLED') return false;
+  return ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(resolveDeliveryStatus(order, serviceDate));
+}
+
+function filterTiffinPreparationSubscriptions(subscriptions, serviceDate) {
+  return (subscriptions || []).filter((subscription) => (
+    isTiffinPreparationEligible(subscription?.orderId, serviceDate)
+  ));
+}
+
 module.exports = {
   getOrderServiceDates,
   getCurrentServiceDate,
   resolveDeliveryStatus,
   applyDeliveryStatus,
-  withCurrentDeliveryStatus
+  withCurrentDeliveryStatus,
+  isTiffinPreparationEligible,
+  filterTiffinPreparationSubscriptions
 };

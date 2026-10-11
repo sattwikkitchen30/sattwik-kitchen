@@ -1,5 +1,6 @@
 const { formatDateKey } = require('./tiffinPreparation');
 const { withCurrentDeliveryStatus } = require('./deliveryStatus');
+const { getOrderCustomer } = require('./orderCustomer');
 
 function emitOrderUpdate(app, order) {
   const io = app.get('io');
@@ -12,7 +13,8 @@ function emitOrderUpdate(app, order) {
     subscriptionEndDate: formatDateKey(orderData.subscriptionEndDate),
     deliveryStatusDate: formatDateKey(orderData.deliveryStatusDate)
   };
-  const customerId = payload.customerId || payload.customer;
+  if (orderData.customerSnapshot) payload.customer = getOrderCustomer(orderData);
+  const customerId = payload.customerId || payload.customer?._id || payload.customer;
   if (customerId) io.to(`customer:${String(customerId)}`).emit('order:updated', payload);
   io.to('admin').emit('order:updated', payload);
   const memberId = payload.deliveryMemberId && (payload.deliveryMemberId._id || payload.deliveryMemberId);

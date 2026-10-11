@@ -40,7 +40,7 @@ function buildDefaultTiffinItems(plans = []) {
     if (!rule) continue;
 
     const planQuantity = Number(plan.quantity);
-    const multiplier = Number.isInteger(planQuantity) && planQuantity > 0 ? planQuantity : 1;
+    const multiplier = Number.isFinite(planQuantity) && planQuantity > 0 ? planQuantity : 1;
     const components = [
       [`${rule.dal}Dal`, 1],
       [`${rule.curry}Curry`, 1]

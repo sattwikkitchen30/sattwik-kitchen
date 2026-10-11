@@ -1,5 +1,5 @@
 const { TIFFIN_MENU_BY_WEEKDAY } = require('./constants');
-const { getLegacyOrderTiffinItems } = require('./tiffinItems');
+const { buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('./tiffinItems');
 
 function getLocalDate(dateValue = new Date()) {
   const value = dateValue instanceof Date ? dateValue : new Date(dateValue);
@@ -121,10 +121,23 @@ function buildPreparationTotals(subscriptions = []) {
     otherItems: []
   };
   const otherItems = new Map();
+  const countedCustomizedOrders = new Set();
 
   for (const subscription of subscriptions) {
     if (!subscription) continue;
-    const tiffinItems = getLegacyOrderTiffinItems(subscription.orderId, subscription);
+    const order = subscription.orderId || subscription;
+    let tiffinItems;
+    if (order.tiffinItemsCustomized) {
+      const orderId = order._id || order.id;
+      const orderKey = orderId ? String(orderId) : order;
+      if (countedCustomizedOrders.has(orderKey)) continue;
+      countedCustomizedOrders.add(orderKey);
+      tiffinItems = getLegacyOrderTiffinItems(order, subscription);
+    } else {
+      tiffinItems = buildDefaultTiffinItems([subscription]);
+      if (!tiffinItems.length) tiffinItems = getLegacyOrderTiffinItems(order, subscription);
+    }
+
     for (const item of tiffinItems) {
       const quantity = Number(item.quantity) || 0;
       if (quantity <= 0) continue;
@@ -162,8 +175,9 @@ function buildActivePlanCounts(subscriptions = []) {
     if (!subscription || !subscription.packageType || !subscription.size) continue;
     const packageType = String(subscription.packageType);
     const size = String(subscription.size);
+    const quantity = Number(subscription.quantity) || 1;
     if (!count[packageType]) continue;
-    count[packageType][size] = (count[packageType][size] || 0) + 1;
+    count[packageType][size] = (count[packageType][size] || 0) + quantity;
   }
 
   return count;

@@ -325,20 +325,28 @@ function renderProductTiles(products) {
     });
   }
 
-  // Group products by category
-  const productsByCategory = {};
+  // Product-category aliases that share the existing Breakfast pickup panel.
+  const breakfastCategoryAliases = new Set(['breakfast', 'tiffin', 'tiffins']);
+  const productsByCategory = Object.create(null);
+  const seenProducts = new Set();
   products.forEach((product) => {
-    if (!productsByCategory[product.category]) {
-      productsByCategory[product.category] = [];
+    const productKey = String(product._id || product.name || '');
+    if (productKey && seenProducts.has(productKey)) return;
+    if (productKey) seenProducts.add(productKey);
+
+    const rawCategory = String(product.category || '').trim();
+    const category = breakfastCategoryAliases.has(rawCategory.toLowerCase()) ? 'Breakfast' : rawCategory;
+    if (!productsByCategory[category]) {
+      productsByCategory[category] = [];
     }
-    productsByCategory[product.category].push(product);
+    productsByCategory[category].push(product);
   });
 
-  // Define existing category mappings (exact match on the category string stored in DB)
+  // Map canonical product categories to the existing menu panels.
   const existingCategories = {
     'Pickles': { grid: picklesGrid, tab: 'pickles' },
     'Powders': { grid: powdersGrid, tab: 'powders' },
-    'Tiffins': { grid: tiffinsGrid, tab: 'breakfast' },
+    'Breakfast': { grid: tiffinsGrid, tab: 'breakfast' },
     'Sweets': { grid: sweetsGrid, tab: 'sweets' },
     'Snacks': { grid: snacksGrid, tab: 'snacks' }
   };

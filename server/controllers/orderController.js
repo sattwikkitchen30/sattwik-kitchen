@@ -3,11 +3,13 @@ const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const Product = require('../models/Product');
 const TiffinSubscription = require('../models/TiffinSubscription');
-const { TIFFIN_PRICES, tiffinDisplayName, ORDER_STATUSES, DELIVERY_STATUSES, STATUS_TRANSITIONS } = require('../utils/constants');
+const { TIFFIN_PRICES, tiffinDisplayName, ORDER_STATUSES } = require('../utils/constants');
 const { emitOrderUpdate } = require('../utils/orderEvents');
-const { parseDateInput, formatDateKey, addDays, getSubscriptionServiceDates } = require('../utils/tiffinPreparation');
+const { parseDateInput, formatDateKey, addDays, startOfDay, getSubscriptionServiceDates } = require('../utils/tiffinPreparation');
 const { getOrderServiceDates, getCurrentServiceDate, resolveDeliveryStatus, applyDeliveryStatus, withCurrentDeliveryStatus } = require('../utils/deliveryStatus');
 const { PREPARATION_TYPES, TIFFIN_PREPARATION_ITEMS, getTiffinPreparationType, buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('../utils/tiffinItems');
+const { getOrderCustomer } = require('../utils/orderCustomer');
+const { normalizeStatus, transitionOrderStatus } = require('../utils/orderStatus');
 
 function extractOrderFulfillment(orderItems = []) {
   if (!orderItems.length) return 'pickup';
@@ -34,28 +36,33 @@ function deriveSubscriptionDates(startDateValue, endDateValue) {
 
 async function createTiffinSubscriptionsForOrder(order, payload = {}) {
   if (!order || order.type !== 'tiffin') return [];
-  const entries = Array.isArray(payload.tiffinPlans) ? payload.tiffinPlans : [];
-  const firstEntry = entries.find((entry) => entry && entry.packageType && entry.size) || null;
-  if (!firstEntry) return [];
+  const entries = Array.isArray(payload.tiffinPlans) ? payload.tiffinPlans.filter((entry) => entry && entry.packageType && entry.size) : [];
+  if (!entries.length) return [];
 
-  const { startDate, endDate } = deriveSubscriptionDates(payload.pickupDate || firstEntry.startDate, firstEntry.endDate || payload.endDate);
+  const { startDate, endDate } = deriveSubscriptionDates(payload.pickupDate || entries[0].startDate, entries[0].endDate || payload.endDate);
+  const subscriptions = [];
 
-  const subscription = await TiffinSubscription.findOneAndUpdate(
-    { customerId: order.customer, orderId: order._id },
-    {
-      customerId: order.customer,
-      orderId: order._id,
-      packageType: firstEntry.packageType,
-      size: firstEntry.size,
-      startDate,
-      endDate,
-      status: 'ACTIVE',
-      isDemo: Boolean(order.isDemo)
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  for (const entry of entries) {
+    const quantity = Math.max(1, parseInt(entry.quantity, 10) || 1);
+    const subscription = await TiffinSubscription.findOneAndUpdate(
+      { customerId: order.customer, orderId: order._id, packageType: entry.packageType, size: entry.size },
+      {
+        customerId: order.customer,
+        orderId: order._id,
+        packageType: entry.packageType,
+        size: entry.size,
+        quantity,
+        startDate,
+        endDate,
+        status: 'ACTIVE',
+        isDemo: Boolean(order.isDemo)
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    subscriptions.push(subscription);
+  }
 
-  return [subscription];
+  return subscriptions;
 }
 
 async function syncTiffinSubscriptionStatus(order) {
@@ -93,25 +100,22 @@ async function createOrder(req, res) {
 
   const { items = [], tiffinPlans = [], customRequest = '', customAmount = 0, type = 'product' } = req.body || {};
 
-  const firstName = String(customerDoc.firstName || req.customer.firstName || '').trim();
-  const lastName = String(customerDoc.lastName || req.customer.lastName || '').trim();
-  const phone = String(customerDoc.phone || req.customer.phone || '').trim();
-  const email = String(customerDoc.email || req.customer.email || '').trim().toLowerCase();
-  const area = String(req.body?.customer?.area || customerDoc.area || req.customer.area || '').trim();
-  const address = String(req.body?.customer?.address || customerDoc.address || req.customer.address || '').trim();
+  const checkoutCustomer = req.body?.customer || {};
+  const firstName = String(checkoutCustomer.firstName ?? customerDoc.firstName ?? req.customer.firstName ?? '').trim();
+  const lastName = String(checkoutCustomer.lastName ?? customerDoc.lastName ?? req.customer.lastName ?? '').trim();
+  const phone = String(checkoutCustomer.phone ?? customerDoc.phone ?? req.customer.phone ?? '').trim();
+  const email = String(checkoutCustomer.email ?? customerDoc.email ?? req.customer.email ?? '').trim().toLowerCase();
+  const area = String(checkoutCustomer.area ?? customerDoc.area ?? req.customer.area ?? '').trim();
+  const address = String(checkoutCustomer.address ?? area ?? customerDoc.address ?? req.customer.address ?? '').trim();
 
   if (!firstName || !lastName || !phone || !email.includes('@')) {
     return res.status(400).json({ message: 'Please provide first name, last name, phone and a valid email.' });
   }
-
-  if (area && !customerDoc.area) {
-    customerDoc.area = area;
-    await customerDoc.save();
+  if (firstName.length > 100 || lastName.length > 100 || phone.length > 40 || email.length > 254 || area.length > 200 || address.length > 500
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ message: 'Please provide valid checkout contact details and address.' });
   }
-  if (address && !customerDoc.address) {
-    customerDoc.address = address;
-    await customerDoc.save();
-  }
+  const customerSnapshot = { firstName, lastName, phone, email, address, area };
 
   const orderItems = [];
   let totalAmount = 0;
@@ -155,10 +159,12 @@ async function createOrder(req, res) {
   }
 
   let tiffinPlanMeta = { packageType: null, size: null, price: null };
+  const normalizedTiffinPlans = [];
   if (Array.isArray(tiffinPlans) && tiffinPlans.length) {
     orderType = 'tiffin';
 
     for (const tp of tiffinPlans) {
+      if (!tp || !tp.packageType || !tp.size) continue;
       const packagePrices = Object.prototype.hasOwnProperty.call(TIFFIN_PRICES, tp.packageType)
         ? TIFFIN_PRICES[tp.packageType]
         : null;
@@ -169,8 +175,10 @@ async function createOrder(req, res) {
         return res.status(400).json({ message: 'Invalid tiffin plan selection.' });
       }
       const quantity = Math.max(1, parseInt(tp.quantity, 10) || 1);
-      const name = tiffinDisplayName(tp.packageType, tp.size);
-      
+      const normalizedPlan = { ...tp, packageType: String(tp.packageType), size: String(tp.size), quantity };
+      normalizedTiffinPlans.push(normalizedPlan);
+      const name = tiffinDisplayName(normalizedPlan.packageType, normalizedPlan.size);
+
       const subtotal = price * quantity;
       totalAmount += subtotal;
       orderItems.push({
@@ -183,7 +191,7 @@ async function createOrder(req, res) {
         fulfillment: 'delivery',
         deliveryStatus: 'PENDING'
       });
-      tiffinPlanMeta = { packageType: tp.packageType, size: tp.size, price };
+      tiffinPlanMeta = { packageType: normalizedPlan.packageType, size: normalizedPlan.size, price };
     }
   }
 
@@ -201,7 +209,7 @@ async function createOrder(req, res) {
   const deliveryDates = fulfillment !== 'pickup'
     ? getSubscriptionServiceDates(selectedOrderDate)
     : null;
-  const subscriptionDates = Array.isArray(tiffinPlans) && tiffinPlans.length ? deliveryDates : null;
+  const subscriptionDates = normalizedTiffinPlans.length ? deliveryDates : null;
 
   if (orderType === 'tiffin' && subscriptionDates?.startDate && tiffinPlanMeta.packageType) {
     const existingTiffinOrder = await Order.findOne({
@@ -249,11 +257,10 @@ async function createOrder(req, res) {
   const order = await Order.create({
     customer: customerDoc._id,
     customerId: customerDoc._id,
+    customerSnapshot,
     items: orderItems,
     ...(orderType === 'tiffin' ? {
-      tiffinItems: Array.isArray(tiffinPlans) && tiffinPlans.length
-        ? buildDefaultTiffinItems(tiffinPlans)
-        : []
+      tiffinItems: normalizedTiffinPlans.length ? buildDefaultTiffinItems(normalizedTiffinPlans) : []
     } : {}),
     fulfillment,
     type: orderType,
@@ -264,13 +271,19 @@ async function createOrder(req, res) {
     subscriptionStartDate: deliveryDates?.startDate || null,
     subscriptionEndDate: deliveryDates?.endDate || null,
     deliveryStatusDate: deliveryDates?.serviceDates[0] || null,
-    deliveryAddress: address || area || customerDoc.address || customerDoc.area || '',
+    deliveryAddress: address || area,
     status: 'PENDING',
     placedAt: new Date()
   });
 
   if (orderType === 'tiffin') {
-    await createTiffinSubscriptionsForOrder(order, req.body || {});
+    try {
+      await createTiffinSubscriptionsForOrder(order, { ...(req.body || {}), tiffinPlans: normalizedTiffinPlans });
+    } catch (error) {
+      await TiffinSubscription.deleteMany({ orderId: order._id });
+      await Order.deleteOne({ _id: order._id });
+      throw error;
+    }
   }
 
   const stockChanges = new Map();
@@ -303,6 +316,7 @@ async function createOrder(req, res) {
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
   emitOrderUpdate(req.app, populated);
   const responseOrder = populated.toObject();
+  responseOrder.customer = getOrderCustomer(responseOrder);
   responseOrder.pickupDate = formatDateKey(populated.pickupDate);
   responseOrder.subscriptionStartDate = formatDateKey(populated.subscriptionStartDate);
   responseOrder.subscriptionEndDate = formatDateKey(populated.subscriptionEndDate);
@@ -373,6 +387,14 @@ async function createManualOrder(req, res) {
     order = await Order.create({
       customer: customer._id,
       customerId: customer._id,
+      customerSnapshot: {
+        firstName: cleanFirstName,
+        lastName: cleanLastName,
+        phone: cleanPhone,
+        email: cleanEmail,
+        address: String(address || customer.address || customer.area || '').trim(),
+        area: customer.area || ''
+      },
       items: [{
         productId: product._id,
         productName: product.name,
@@ -403,6 +425,7 @@ async function createManualOrder(req, res) {
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
   emitOrderUpdate(req.app, populated);
   const responseOrder = populated.toObject();
+  responseOrder.customer = getOrderCustomer(responseOrder);
   responseOrder.pickupDate = formatDateKey(populated.pickupDate);
   responseOrder.subscriptionStartDate = formatDateKey(populated.subscriptionStartDate);
   responseOrder.subscriptionEndDate = formatDateKey(populated.subscriptionEndDate);
@@ -410,7 +433,7 @@ async function createManualOrder(req, res) {
 }
 
 async function listOrders(req, res) {
-  const { status, type, area, search, sort = '-createdAt', page = 1, limit = 50, from, to, fulfillment } = req.query;
+  const { status, type, area, search, sort = '-createdAt', page = 1, limit = 50, from, to, createdFrom, createdTo, orderDate, fulfillment } = req.query;
   const fulfillmentFilter = String(fulfillment || '').toLowerCase();
   if (fulfillmentFilter && !['delivery', 'pickup'].includes(fulfillmentFilter)) {
     return res.status(400).json({ message: 'Fulfillment must be delivery or pickup.' });
@@ -418,27 +441,101 @@ async function listOrders(req, res) {
   const match = {};
   if (status) match.status = new RegExp(`^${status}$`, 'i');
   if (type) match.type = type;
-  if (from || to) {
-    match.createdAt = {};
-    if (from) match.createdAt.$gte = new Date(from + 'T00:00:00.000Z');
-    if (to) match.createdAt.$lte = new Date(to + 'T23:59:59.999Z');
+  const createdAt = {};
+  if (from) createdAt.$gte = new Date(from + 'T00:00:00.000Z');
+  if (to) createdAt.$lte = new Date(to + 'T23:59:59.999Z');
+  if (createdFrom) {
+    const date = new Date(createdFrom);
+    if (Number.isNaN(date.getTime())) return res.status(400).json({ message: 'Invalid order creation start time.' });
+    createdAt.$gte = date;
   }
+  if (createdTo) {
+    const date = new Date(createdTo);
+    if (Number.isNaN(date.getTime())) return res.status(400).json({ message: 'Invalid order creation end time.' });
+    createdAt.$lt = date;
+  }
+  if (Object.keys(createdAt).length) match.createdAt = createdAt;
+  if (orderDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDate) || formatDateKey(parseDateInput(orderDate)) !== orderDate) {
+      return res.status(400).json({ message: 'Invalid order date.' });
+    }
+    const selectedDate = startOfDay(parseDateInput(orderDate));
+    const nextDate = addDays(selectedDate, 1);
+    const dateField = fulfillmentFilter === 'delivery' ? 'subscriptionStartDate' : 'pickupDate';
+    match[dateField] = { $gte: selectedDate, $lt: nextDate };
+  }
+  const conditions = [];
   if (area) {
-    match.$or = [
+    conditions.push({ $or: [
       { 'customerDoc.area': new RegExp(area, 'i') },
+      { 'customerDoc.address': new RegExp(area, 'i') },
       { deliveryAddress: new RegExp(area, 'i') }
-    ];
+    ] });
   }
-  if (search) {
-    const searchRegex = new RegExp(search, 'i');
-    match.$or = [
+  const cleanSearch = String(search || '').trim();
+  if (cleanSearch) {
+    const escapedSearch = cleanSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const searchRegex = new RegExp(escapedSearch, 'i');
+    const searchableFields = [
       { orderId: searchRegex },
       { 'customerDoc.firstName': searchRegex },
       { 'customerDoc.lastName': searchRegex },
       { 'customerDoc.email': searchRegex },
-      { 'customerDoc.phone': searchRegex }
+      { 'customerDoc.phone': searchRegex },
+      { 'customerDoc.address': searchRegex },
+      { 'customerDoc.area': searchRegex },
+      { deliveryAddress: searchRegex },
+      { type: searchRegex },
+      { fulfillment: searchRegex },
+      { customRequest: searchRegex },
+      { 'items.productName': searchRegex },
+      { 'items.category': searchRegex }
     ];
+    const normalizedStatusSearch = cleanSearch.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+    const statusAliases = {
+      'pickup completed': 'DELIVERED',
+      'out for delivery': 'OUT_FOR_DELIVERY',
+      'pickup complete': 'DELIVERED'
+    };
+    const statusSearch = (statusAliases[normalizedStatusSearch] || normalizedStatusSearch.replace(/\s+/g, '_'))
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const statusRegex = new RegExp(statusSearch.replace(/[_\s-]+/g, '[_\\s-]*'), 'i');
+    searchableFields.push(
+      { status: statusRegex },
+      { 'items.deliveryStatus': statusRegex }
+    );
+    const phoneDigits = cleanSearch.replace(/\D/g, '');
+    if (phoneDigits) {
+      searchableFields.push({
+        $expr: {
+          $regexMatch: {
+            input: { $ifNull: ['$customerDoc.phone', ''] },
+            regex: phoneDigits.split('').map((digit) => `\\D*${digit}`).join(''),
+            options: 'i'
+          }
+        }
+      });
+    }
+    searchableFields.push(
+      {
+        $expr: {
+          $regexMatch: {
+            input: {
+              $concat: [
+                { $ifNull: ['$customerDoc.firstName', ''] },
+                ' ',
+                { $ifNull: ['$customerDoc.lastName', ''] }
+              ]
+            },
+            regex: escapedSearch,
+            options: 'i'
+          }
+        }
+      }
+    );
+    conditions.push({ $or: searchableFields });
   }
+  if (conditions.length) match.$and = conditions;
 
   const safeSort = ['createdAt', '-createdAt', 'totalAmount', '-totalAmount', 'status', '-status'].includes(sort) ? sort : '-createdAt';
   const p = Math.max(1, parseInt(page, 10) || 1);
@@ -447,6 +544,16 @@ async function listOrders(req, res) {
   const pipeline = [
     { $lookup: { from: 'customers', localField: 'customer', foreignField: '_id', as: 'customerDoc' } },
     { $unwind: { path: '$customerDoc', preserveNullAndEmptyArrays: true } },
+    {
+      $set: {
+        customerDoc: {
+          $mergeObjects: [
+            { $ifNull: ['$customerDoc', {}] },
+            { $ifNull: ['$customerSnapshot', {}] }
+          ]
+        }
+      }
+    },
     { $lookup: { from: 'deliverymembers', localField: 'deliveryMemberId', foreignField: '_id', as: 'deliveryMemberDoc' } },
     { $unwind: { path: '$deliveryMemberDoc', preserveNullAndEmptyArrays: true } }
   ];
@@ -471,6 +578,7 @@ async function listOrders(req, res) {
   const fulfillmentProjection = fulfillmentFilter ? [
     {
       $set: {
+        _orderAmount: '$totalAmount',
         _allItemTotal: { $sum: { $map: { input: { $ifNull: ['$items', []] }, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } },
         _hasPickupItems: { $in: ['pickup', { $map: { input: { $ifNull: ['$items', []] }, as: 'item', in: '$$item.fulfillment' } }] },
         _hasDeliveryItems: { $in: ['delivery', { $map: { input: { $ifNull: ['$items', []] }, as: 'item', in: '$$item.fulfillment' } }] }
@@ -489,6 +597,7 @@ async function listOrders(req, res) {
     },
     {
       $set: {
+        orderAmount: '$_orderAmount',
         totalAmount: {
           $add: [
             { $sum: '$items.subtotal' },
@@ -514,7 +623,7 @@ async function listOrders(req, res) {
         }
       }
     },
-    { $unset: ['_allItemTotal', '_hasPickupItems', '_hasDeliveryItems'] }
+    { $unset: ['_orderAmount', '_allItemTotal', '_hasPickupItems', '_hasDeliveryItems'] }
   ] : [];
 
   pipeline.push({
@@ -550,6 +659,7 @@ async function listOrders(req, res) {
       });
       return {
         ...deliveryStatusOrder,
+        orderAmount: order.orderAmount ?? order.totalAmount,
         pickupDate: formatDateKey(order.pickupDate),
         subscriptionStartDate: formatDateKey(deliveryStartDate),
         subscriptionEndDate: formatDateKey(order.subscriptionEndDate || derivedDeliveryDates?.endDate),
@@ -568,6 +678,7 @@ async function getOrder(req, res) {
   if (!order) return res.status(404).json({ message: 'Order not found' });
   const responseOrder = order.toObject();
   Object.assign(responseOrder, withCurrentDeliveryStatus(responseOrder));
+  responseOrder.customer = getOrderCustomer(responseOrder);
   if (responseOrder.type === 'tiffin') {
     responseOrder.tiffinItems = getLegacyOrderTiffinItems(responseOrder);
   }
@@ -576,6 +687,25 @@ async function getOrder(req, res) {
   responseOrder.subscriptionEndDate = formatDateKey(order.subscriptionEndDate);
   responseOrder.deliveryStatusDate = formatDateKey(order.deliveryStatusDate);
   res.json({ order: responseOrder });
+}
+
+async function updateAmount(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid order ID.' });
+  }
+
+  const amount = req.body?.amount;
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount > Number.MAX_SAFE_INTEGER / 100) {
+    return res.status(400).json({ message: 'Order amount must be a valid non-negative number.' });
+  }
+
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+
+  order.totalAmount = Math.round((amount + Number.EPSILON) * 100) / 100;
+  await order.save();
+  emitOrderUpdate(req.app, order);
+  return res.json({ message: 'Order amount updated successfully.', amount: order.totalAmount, order });
 }
 
 async function updateTiffinItems(req, res) {
@@ -694,73 +824,22 @@ async function updatePickupDate(req, res) {
 }
 
 async function updateStatus(req, res) {
-  const status = String(req.body?.status || '');
+  const status = normalizeStatus(req.body?.status);
   if (!ORDER_STATUSES.includes(status)) return res.status(400).json({ message: 'Invalid status' });
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ message: 'Order not found' });
-  const pickupItems = (order.items || []).filter((item) => item.fulfillment === 'pickup');
-  const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
-  const isPickupOnly = pickupItems.length > 0 && deliveryItems.length === 0;
   const fulfillmentScope = String(req.body?.fulfillment || '').toLowerCase();
   if (fulfillmentScope && !['pickup', 'delivery'].includes(fulfillmentScope)) {
     return res.status(400).json({ message: 'Fulfillment must be pickup or delivery.' });
   }
-  if (fulfillmentScope === 'delivery' && isPickupOnly) {
-    return res.status(400).json({ message: 'Pickup-only orders cannot be updated through the delivery workflow.' });
+  const result = await transitionOrderStatus(Order, order, status, { fulfillment: fulfillmentScope || undefined, actor: 'admin' });
+  if (result.error) return res.status(result.error.status).json({ message: result.error.message });
+  if (result.order.type === 'tiffin' && result.cancellation) {
+    await syncTiffinSubscriptionStatus(result.order);
+  } else if (result.order.type === 'tiffin' && status === 'ACCEPTED') {
+    await syncTiffinSubscriptionDates(result.order);
   }
-  if (fulfillmentScope === 'pickup' || isPickupOnly) {
-    if (!pickupItems.length) return res.status(400).json({ message: 'Order has no pickup items.' });
-    if (!['PENDING', 'ACCEPTED', 'DELIVERED', 'CANCELLED'].includes(status)) {
-      return res.status(400).json({ message: 'Invalid pickup status.' });
-    }
-    pickupItems.forEach((item) => { item.deliveryStatus = status; });
-    if (isPickupOnly) order.status = status;
-    await order.save();
-    await syncTiffinSubscriptionStatus(order);
-    const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
-    emitOrderUpdate(req.app, populated);
-    return res.json({ message: `Pickup marked as ${status}`, order: populated });
-  }
-  const isDeliveryOrder = deliveryItems.length > 0;
-  if (isDeliveryOrder && getOrderServiceDates(order).length && !getCurrentServiceDate(order)) {
-    return res.status(400).json({ message: 'No delivery service is scheduled for today.' });
-  }
-  const currentDeliveryStatus = resolveDeliveryStatus(order);
-  if (status === 'OUT_FOR_DELIVERY' && !order.deliveryMemberId) {
-    return res.status(400).json({ message: 'Choose a delivery member' });
-  }
-  if (!isDeliveryOrder && ['OUT_FOR_DELIVERY', 'DELIVERED'].includes(status)) {
-    return res.status(400).json({ message: 'Pickup-only orders cannot move into delivery workflow.' });
-  }
-  if (order.type === 'tiffin' && isDeliveryOrder) {
-    const currentStatus = currentDeliveryStatus;
-    const isAcceptance = currentStatus === 'PENDING' && status === 'ACCEPTED';
-    const isOutForDelivery = currentStatus === 'ACCEPTED' && status === 'OUT_FOR_DELIVERY';
-    const isDeliveryCompletion = currentStatus === 'OUT_FOR_DELIVERY' && status === 'DELIVERED';
-    if (!isAcceptance && !isOutForDelivery && !isDeliveryCompletion) {
-      return res.status(400).json({ message: `Invalid tiffin delivery transition from ${currentStatus} to ${status}.` });
-    }
-    if (isAcceptance) setTiffinAcceptanceDates(order);
-    applyDeliveryStatus(order, status);
-    if (isOutForDelivery) order.outForDeliveryAt = new Date();
-    if (status === 'DELIVERED') order.deliveredAt = new Date();
-    await order.save();
-    if (isAcceptance) await syncTiffinSubscriptionDates(order);
-    await syncTiffinSubscriptionStatus(order);
-    const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
-    emitOrderUpdate(req.app, populated);
-    return res.json({ message: `Order marked as ${status}`, order: populated });
-  }
-  if (DELIVERY_STATUSES.includes(currentDeliveryStatus) || DELIVERY_STATUSES.includes(status)) {
-    if (STATUS_TRANSITIONS[currentDeliveryStatus] !== status) return res.status(400).json({ message: `Invalid transition from ${currentDeliveryStatus} to ${status}.` });
-    if (status === 'ACCEPTED') order.acceptedAt = new Date();
-    if (status === 'OUT_FOR_DELIVERY') order.outForDeliveryAt = new Date();
-    if (status === 'DELIVERED') order.deliveredAt = new Date();
-  }
-  if (isDeliveryOrder && DELIVERY_STATUSES.includes(status)) applyDeliveryStatus(order, status);
-  else order.status = status;
-  await order.save();
-  await syncTiffinSubscriptionStatus(order);
+  if (result.order.type === 'tiffin') await syncTiffinSubscriptionStatus(result.order);
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
   emitOrderUpdate(req.app, populated);
   res.json({ message: `Order marked as ${status}`, order: populated });
@@ -897,4 +976,4 @@ async function deleteOrder(req, res) {
   res.json({ message: 'Order deleted' });
 }
 
-module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateTiffinItems, updateStatus, deleteOrder, assignDeliveryMember, updatePickupDate, updateTiffinEndDate };
+module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateAmount, updateTiffinItems, updateStatus, deleteOrder, assignDeliveryMember, updatePickupDate, updateTiffinEndDate };

@@ -25,18 +25,20 @@ function statusLabel(status) {
     PENDING: 'Pending',
     ACCEPTED: 'Accepted',
     OUT_FOR_DELIVERY: 'Out for Delivery',
-    DELIVERED: 'Delivered'
+    DELIVERED: 'Delivered',
+    CANCELLED: 'Cancelled'
   })[status] || String(status || '').replaceAll('_', ' ');
 }
 function pickupStatusForOrder(order, pickupItems, deliveryItems) {
   const rawStatus = String(pickupItems[0]?.deliveryStatus || (deliveryItems.length ? 'PENDING' : order.status || 'PENDING')).toUpperCase();
   if (rawStatus === 'CANCELLED') return 'CANCELLED';
   if (rawStatus === 'DELIVERED') return 'DELIVERED';
-  if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY'].includes(rawStatus)) return 'ACCEPTED';
+  if (rawStatus === 'OUT_FOR_DELIVERY') return rawStatus;
+  if (['ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY'].includes(rawStatus)) return 'ACCEPTED';
   return 'PENDING';
 }
 function pickupStatusLabel(status) {
-  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', DELIVERED: 'Pickup Completed', CANCELLED: 'Cancelled' })[status] || status;
+  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Pickup Completed', CANCELLED: 'Cancelled' })[status] || status;
 }
 function escapeHtml(value) {
   return String(value ?? '')
@@ -47,16 +49,17 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 function renderTimeline(steps, currentStatus) {
-  const currentIndex = steps.indexOf(currentStatus);
+  const timelineSteps = currentStatus === 'CANCELLED' ? [...steps, 'CANCELLED'] : steps;
+  const currentIndex = timelineSteps.indexOf(currentStatus);
   const finalIndex = currentIndex >= 0 ? currentIndex : 0;
-  return `<div class="timeline">${steps.map((step, index) => {
+  return `<div class="timeline">${timelineSteps.map((step, index) => {
     const complete = index < finalIndex || (step === 'DELIVERED' && currentStatus === 'DELIVERED');
     const current = index === finalIndex && !complete;
     return `<div class="timeline-step ${complete ? 'complete' : ''} ${current ? 'current' : ''}"><div class="dot">${complete ? '✓' : current ? '●' : '○'}</div><span>${statusLabel(step)}</span></div>`;
   }).join('')}</div>`;
 }
 function renderPickupTimeline(status) {
-  const steps = status === 'CANCELLED' ? ['PENDING', 'CANCELLED'] : ['PENDING', 'ACCEPTED', 'DELIVERED'];
+  const steps = status === 'CANCELLED' ? ['PENDING', 'CANCELLED'] : ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
   const currentIndex = steps.indexOf(status);
   return `<div class="timeline">${steps.map((step, index) => {
     const complete = index < currentIndex || (step === 'DELIVERED' && status === 'DELIVERED');
@@ -71,6 +74,8 @@ function renderOrder(order) {
   const pickupStatus = pickupStatusForOrder(order, pickupItems, deliveryItems);
   const isTiffinOrder = order.type === 'tiffin' && deliveryItems.length > 0;
   const isPickupOnlyOrder = pickupItems.length > 0 && deliveryItems.length === 0;
+  const currentStatus = isPickupOnlyOrder ? pickupStatus : String(order.status || 'PENDING').toUpperCase();
+  const cancelDisabled = ['DELIVERED', 'CANCELLED'].includes(currentStatus) || Boolean(order.firstDeliveredAt || order.deliveredAt);
   const deliveryTracking = deliveryItems.length || !pickupItems.length ? renderTimeline(deliveryStatusSteps, order.status) : '';
   const pickupTracking = pickupItems.length
     ? `<section class="pickup-tracking">
@@ -94,6 +99,16 @@ function renderOrder(order) {
     : hasDeliveryDateRange
       ? `<div class="order-meta"><strong>Order ID:</strong> ${order.orderId}<br><strong>Plan:</strong> ${items.map((item) => item.productName).join(', ') || 'Tiffin Plan'}<br><strong>Type:</strong> ${order.type}<br><strong>Start Date:</strong> ${orderDateLabel(subscriptionStart)}<br><strong>End Date:</strong> ${orderDateLabel(subscriptionEnd)}<br><strong>Amount:</strong> ${money(order.totalAmount)}</div>`
       : `<div class="order-meta"><strong>Order ID:</strong> ${order.orderId}<br><strong>Amount:</strong> ${money(order.totalAmount)}</div>`;
+  const preparationItems = isTiffinOrder && Array.isArray(order.tiffinItems)
+    ? `<section class="order-preparation-items">
+        <h3>Order items</h3>
+        <ul>${order.tiffinItems.map((item) => `<li>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</li>`).join('')}</ul>
+      </section>`
+    : '';
+  const confirmedCustomer = order.customer || {};
+  const customerDetails = confirmedCustomer.firstName || confirmedCustomer.lastName || confirmedCustomer.phone || confirmedCustomer.email
+    ? `<div class="order-address"><strong>Order contact</strong><br>${escapeHtml([confirmedCustomer.firstName, confirmedCustomer.lastName].filter(Boolean).join(' '))}<br>${escapeHtml(confirmedCustomer.phone || '')}<br>${escapeHtml(confirmedCustomer.email || '')}${confirmedCustomer.address || confirmedCustomer.area ? `<br>${escapeHtml(confirmedCustomer.address || confirmedCustomer.area)}` : ''}</div>`
+    : '';
   const deliveryStartText = deliveryItems.length && !hasDeliveryDateRange
     ? `<div class="order-address"><strong>Start Date:</strong> ${orderDateLabel(subscriptionStart)}</div>`
     : '';
@@ -105,15 +120,18 @@ function renderOrder(order) {
       </div>
       ${subscriptionText}
       ${deliveryStartText}
+      ${preparationItems}
       ${deliveryTracking}
       ${pickupTracking}
+      ${customerDetails}
       ${isPickupOnlyOrder
         ? `<section class="pickup-products">
             <h3>Products</h3>
             <ul>${pickupItems.map((item) => `<li><span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span></li>`).join('')}</ul>
           </section>`
-        : `<div class="order-items">${items.map((item) => `<div class="order-item"><span>${item.productName} × ${item.quantity}</span><strong>${money(item.subtotal)}</strong></div>`).join('')}</div>`}
-      ${(deliveryItems.length || !pickupItems.length) && order.deliveryAddress ? `<div class="order-address"><strong>Delivery address</strong><br>${order.deliveryAddress}</div>` : ''}
+        : `<div class="order-items">${items.map((item) => `<div class="order-item"><span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span><strong>${money(item.subtotal)}</strong></div>`).join('')}</div>`}
+      ${(deliveryItems.length || !pickupItems.length) && order.deliveryAddress ? `<div class="order-address"><strong>Delivery address</strong><br>${escapeHtml(order.deliveryAddress)}</div>` : ''}
+      <div class="order-actions"><button type="button" class="cancel-order-btn" data-cancel-order="${escapeHtml(order._id)}" ${cancelDisabled ? 'disabled aria-disabled="true"' : ''}>Cancel Order</button></div>
     </article>
   `;
 }
@@ -136,6 +154,26 @@ async function loadOrders() {
     ordersMessage.textContent = error.message;
   }
 }
+
+ordersList.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-cancel-order]');
+  if (!button || button.disabled) return;
+  if (!window.confirm('Are you sure you want to cancel this order?')) return;
+  button.disabled = true;
+  ordersMessage.textContent = '';
+  try {
+    const response = await fetch(`/api/customer-orders/${encodeURIComponent(button.dataset.cancelOrder)}/cancel`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Could not cancel order.');
+    await loadOrders();
+  } catch (error) {
+    ordersMessage.textContent = error.message || 'Could not cancel order.';
+    await loadOrders();
+  }
+});
 
 document.getElementById('logoutButton')?.addEventListener('click', async () => {
   try { await fetch('/api/customer-auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (error) { /* local logout still completes */ }

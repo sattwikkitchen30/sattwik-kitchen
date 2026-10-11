@@ -25,6 +25,14 @@ document.getElementById('deliveryLoginForm')?.addEventListener('submit', async (
 });
 
 function money(value) { return `$${Number(value || 0).toFixed(2)}`; }
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 function deliveryStatusLabel(status) {
   return ({
     PENDING: 'Pending',
@@ -39,7 +47,8 @@ function orderCard(order) {
   const customer = order.customer || {};
   const activeLabel = ['ACCEPTED', 'OUT_FOR_DELIVERY'].includes(order.status) ? '<strong class="active-delivery-label">MY ACTIVE DELIVERY</strong>' : '';
   const acceptedTime = order.acceptedAt ? `<div><strong>Accepted</strong><br>${new Date(order.acceptedAt).toLocaleString()}</div>` : '';
-  return `<article class="delivery-order assigned-delivery" data-delivery-order="${order._id}">${activeLabel}<div class="delivery-order-head"><div><h2>${order.orderId}</h2><p>${customer.firstName || ''} ${customer.lastName || ''} • ${customer.phone || ''}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${order.deliveryAddress || customer.address || customer.area || 'Not provided'}</div><div><strong>Current status</strong><br>${deliveryStatusLabel(order.status)}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${item.productName} × ${item.quantity}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${order._id}" data-next-status="${next}" ${next ? '' : 'disabled'}>${actionText || 'Complete'}</button></div></article>`;
+  const terminal = ['DELIVERED', 'CANCELLED'].includes(order.status) || Boolean(order.firstDeliveredAt || order.deliveredAt);
+  return `<article class="delivery-order assigned-delivery" data-delivery-order="${escapeHtml(order._id)}">${activeLabel}<div class="delivery-order-head"><div><h2>${escapeHtml(order.orderId)}</h2><p>${escapeHtml(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())} • ${escapeHtml(customer.phone || '')}<br>${escapeHtml(customer.email || '')}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${escapeHtml(order.deliveryAddress || customer.address || customer.area || 'Not provided')}</div><div><strong>Current status</strong><br>${escapeHtml(deliveryStatusLabel(order.status))}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${escapeHtml(order._id)}" data-next-status="${escapeHtml(next || '')}" ${next ? '' : 'disabled'}>${escapeHtml(actionText || 'Complete')}</button><button type="button" data-cancel-delivery="${escapeHtml(order._id)}" ${terminal ? 'disabled' : ''}>Cancel Order</button></div></article>`;
 }
 
 async function loadDeliveryOrders() {
@@ -51,6 +60,20 @@ async function loadDeliveryOrders() {
       button.disabled = true;
       try { await deliveryApi(`/delivery-orders/${button.dataset.orderId}/status`, { method: 'PUT', body: JSON.stringify({ status: button.dataset.nextStatus }) }); await loadDeliveryOrders(); }
       catch (error) { deliveryMessage.textContent = error.message; await loadDeliveryOrders(); }
+    }));
+    document.querySelectorAll('[data-cancel-delivery]').forEach((button) => button.addEventListener('click', async () => {
+      if (button.disabled || !window.confirm('Are you sure you want to cancel this order?')) return;
+      button.disabled = true;
+      try {
+        await deliveryApi(`/delivery-orders/${button.dataset.cancelDelivery}/status`, {
+          method: 'PUT',
+          body: JSON.stringify({ status: 'CANCELLED' })
+        });
+        await loadDeliveryOrders();
+      } catch (error) {
+        deliveryMessage.textContent = error.message;
+        await loadDeliveryOrders();
+      }
     }));
   } catch (error) { deliveryMessage.textContent = error.message; }
 }

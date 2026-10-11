@@ -834,12 +834,14 @@ async function updateStatus(req, res) {
   }
   const result = await transitionOrderStatus(Order, order, status, { fulfillment: fulfillmentScope || undefined, actor: 'admin' });
   if (result.error) return res.status(result.error.status).json({ message: result.error.message });
-  if (result.order.type === 'tiffin' && result.cancellation) {
-    await syncTiffinSubscriptionStatus(result.order);
-  } else if (result.order.type === 'tiffin' && status === 'ACCEPTED') {
-    await syncTiffinSubscriptionDates(result.order);
+  if (result.order.type === 'tiffin') {
+    if (result.scope === 'delivery' && !result.cancellation && status === 'ACCEPTED') {
+      await syncTiffinSubscriptionDates(result.order);
+    }
+    if (result.scope === 'delivery' || result.cancellation) {
+      await syncTiffinSubscriptionStatus(result.order);
+    }
   }
-  if (result.order.type === 'tiffin') await syncTiffinSubscriptionStatus(result.order);
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email');
   emitOrderUpdate(req.app, populated);
   res.json({ message: `Order marked as ${status}`, order: populated });

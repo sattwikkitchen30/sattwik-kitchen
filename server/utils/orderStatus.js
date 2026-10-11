@@ -21,11 +21,24 @@ function normalizeStatus(status) {
 }
 
 function getPickupStatus(order) {
-  const item = (order.items || []).find((entry) => entry.fulfillment === 'pickup');
-  return normalizeStatus(item?.deliveryStatus || order.status || 'PENDING');
+  const items = order.items || [];
+  const pickupItems = items.filter((entry) => entry.fulfillment === 'pickup');
+  const defaultStatus = items.some((entry) => entry.fulfillment === 'delivery')
+    ? 'PENDING'
+    : normalizeStatus(order.status || 'PENDING');
+  const itemStatuses = pickupItems.map((entry) => normalizeStatus(entry.deliveryStatus || defaultStatus));
+  const itemStatus = itemStatuses[0] || 'PENDING';
+  if (pickupItems.length && !items.some((entry) => entry.fulfillment === 'delivery')) {
+    const orderStatus = normalizeStatus(order.status);
+    if (itemStatuses.includes('DELIVERED') || orderStatus === 'DELIVERED') return 'DELIVERED';
+    if (itemStatuses.includes('CANCELLED') || orderStatus === 'CANCELLED') return 'CANCELLED';
+  }
+  if (itemStatuses.includes('DELIVERED')) return 'DELIVERED';
+  if (itemStatuses.includes('CANCELLED')) return 'CANCELLED';
+  return itemStatus;
 }
 
-function getTransition(order, requested, fulfillment, now) {
+function getTransition(order, requested, fulfillment, now, actor) {
   const pickupItems = (order.items || []).filter((item) => item.fulfillment === 'pickup');
   const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
   const isPickupOnly = pickupItems.length > 0 && deliveryItems.length === 0;
@@ -59,6 +72,16 @@ function getTransition(order, requested, fulfillment, now) {
     return { current, scope, pickupItems, deliveryItems, isPickupOnly, cancellation: true };
   }
 
+  if (scope === 'pickup') {
+    if (actor !== 'admin') {
+      return { error: { status: 403, message: 'Only an admin can change pickup status.' } };
+    }
+    if (!['PENDING', 'ACCEPTED', 'DELIVERED'].includes(requested)) {
+      return { error: { status: 400, message: 'Pickup status must be Pending, Accepted, or Delivered.' } };
+    }
+    return { current, scope, pickupItems, deliveryItems, isPickupOnly, flexiblePickup: true };
+  }
+
   const next = STATUS_TRANSITIONS[current];
   if (next !== requested) {
     return { error: { status: 400, message: `Invalid transition from ${current} to ${requested}.` } };
@@ -78,7 +101,7 @@ function getTransition(order, requested, fulfillment, now) {
 async function transitionOrderStatus(Order, order, requestedStatus, options = {}) {
   const requested = normalizeStatus(requestedStatus);
   const now = options.now || new Date();
-  const transition = getTransition(order, requested, options.fulfillment, now);
+  const transition = getTransition(order, requested, options.fulfillment, now, options.actor);
   if (transition.error) return transition;
   if (options.actor === 'delivery' && !['OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].includes(requested)) {
     return { error: { status: 400, message: 'Delivery members cannot set this status.' } };
@@ -93,6 +116,14 @@ async function transitionOrderStatus(Order, order, requestedStatus, options = {}
     deliveryStatusDate: order.deliveryStatusDate ?? null,
     ...(options.accessFilter || {})
   };
+  if (transition.scope === 'pickup' && transition.pickupItems.length) {
+    filter.items = {
+      $elemMatch: {
+        fulfillment: 'pickup',
+        deliveryStatus: transition.pickupItems[0].deliveryStatus ?? null
+      }
+    };
+  }
   const update = { $set: {} };
   if (transition.cancellation) {
     update.$set.status = 'CANCELLED';
@@ -105,7 +136,7 @@ async function transitionOrderStatus(Order, order, requestedStatus, options = {}
     if (transition.currentServiceDate) update.$set.deliveryStatusDate = transition.currentServiceDate;
     if (requested === 'ACCEPTED') {
       update.$set.acceptedAt = now;
-      if (order.type === 'tiffin' && !order.subscriptionStartDate) {
+      if (transition.scope === 'delivery' && order.type === 'tiffin' && !order.subscriptionStartDate) {
         const dates = getSubscriptionServiceDates(now);
         update.$set.subscriptionStartDate = dates.startDate;
         update.$set.subscriptionEndDate = dates.endDate;

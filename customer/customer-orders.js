@@ -30,7 +30,12 @@ function statusLabel(status) {
   })[status] || String(status || '').replaceAll('_', ' ');
 }
 function pickupStatusForOrder(order, pickupItems, deliveryItems) {
-  const rawStatus = String(pickupItems[0]?.deliveryStatus || (deliveryItems.length ? 'PENDING' : order.status || 'PENDING')).toUpperCase();
+  const pickupStatuses = pickupItems.map((item) => String(item.deliveryStatus || 'PENDING').toUpperCase());
+  const rawStatus = pickupStatuses.includes('DELIVERED')
+    ? 'DELIVERED'
+    : pickupStatuses.includes('CANCELLED')
+      ? 'CANCELLED'
+      : pickupStatuses[0] || (deliveryItems.length ? 'PENDING' : String(order.status || 'PENDING').toUpperCase());
   if (rawStatus === 'CANCELLED') return 'CANCELLED';
   if (rawStatus === 'DELIVERED') return 'DELIVERED';
   if (rawStatus === 'OUT_FOR_DELIVERY') return rawStatus;
@@ -38,7 +43,7 @@ function pickupStatusForOrder(order, pickupItems, deliveryItems) {
   return 'PENDING';
 }
 function pickupStatusLabel(status) {
-  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Pickup Completed', CANCELLED: 'Cancelled' })[status] || status;
+  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Delivered', CANCELLED: 'Cancelled' })[status] || status;
 }
 function escapeHtml(value) {
   return String(value ?? '')

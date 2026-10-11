@@ -184,7 +184,12 @@ function currency(value) {
 }
 
 function pickupStatusForOrder(order, items) {
-  const rawStatus = String(items.find((item) => item.fulfillment === 'pickup')?.deliveryStatus || (order.fulfillment === 'pickup' ? order.status : 'PENDING')).toUpperCase();
+  const pickupStatuses = items.filter((item) => item.fulfillment === 'pickup').map((item) => String(item.deliveryStatus || 'PENDING').toUpperCase());
+  const rawStatus = pickupStatuses.includes('DELIVERED')
+    ? 'DELIVERED'
+    : pickupStatuses.includes('CANCELLED')
+      ? 'CANCELLED'
+      : pickupStatuses[0] || (order.fulfillment === 'pickup' ? String(order.status || 'PENDING').toUpperCase() : 'PENDING');
   if (rawStatus === 'CANCELLED') return 'CANCELLED';
   if (rawStatus === 'DELIVERED') return 'DELIVERED';
   if (rawStatus === 'OUT_FOR_DELIVERY') return rawStatus;
@@ -193,7 +198,7 @@ function pickupStatusForOrder(order, items) {
 }
 
 function pickupStatusLabel(status) {
-  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Pickup Completed', CANCELLED: 'Cancelled' })[status] || status;
+  return ({ PENDING: 'Pending', ACCEPTED: 'Accepted', OUT_FOR_DELIVERY: 'Out for Delivery', DELIVERED: 'Delivered', CANCELLED: 'Cancelled' })[status] || status;
 }
 
 function deliveryStatusLabel(status) {
@@ -213,7 +218,9 @@ function renderDeliveryStatusOptions(status, includeCancelled = false, canCancel
 }
 
 function renderPickupStatusControl(orderId, status, canCancel = true) {
-  const options = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED']
+  const values = ['PENDING', 'ACCEPTED', 'DELIVERED', 'CANCELLED'];
+  if (!values.includes(status)) values.unshift(status);
+  const options = values
     .map((value) => `<option value="${value}" ${value === status ? 'selected' : ''} ${value === 'CANCELLED' && (!canCancel || ['DELIVERED', 'CANCELLED'].includes(status)) ? 'disabled' : ''}>${pickupStatusLabel(value)}</option>`)
     .join('');
   const disabled = ['DELIVERED', 'CANCELLED'].includes(status) ? 'disabled' : '';

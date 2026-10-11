@@ -24,6 +24,12 @@ function modelFor(order) {
       calls.push({ filter, update, options });
       if (filter.status !== order.status) return { lean: async () => null };
       if (filter.deliveryMemberId && filter.deliveryMemberId !== order.deliveryMemberId) return { lean: async () => null };
+      if (filter.items?.$elemMatch) {
+        const expectedStatus = filter.items.$elemMatch.deliveryStatus;
+        if (!order.items.some((item) => item.fulfillment === 'pickup' && (item.deliveryStatus ?? null) === expectedStatus)) {
+          return { lean: async () => null };
+        }
+      }
       for (const [key, value] of Object.entries(update.$set)) {
         const itemField = /^items\.\$\[item\]\.deliveryStatus$/.test(key);
         if (itemField) {
@@ -64,7 +70,7 @@ test('delivery order follows Accepted to Out for Delivery to Delivered and prese
   assert.equal(order.orderId, 'permanent-id');
 });
 
-test('pickup orders follow Pending to Accepted to Out for Delivery to Delivered', async () => {
+test('pickup status can move freely among Pending, Accepted, and Delivered', async () => {
   const order = makeOrder({
     status: 'PENDING',
     deliveryStatusDate: null,
@@ -76,7 +82,7 @@ test('pickup orders follow Pending to Accepted to Out for Delivery to Delivered'
   });
   const model = modelFor(order);
 
-  for (const status of ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED']) {
+  for (const status of ['ACCEPTED', 'PENDING', 'DELIVERED']) {
     const result = await transitionOrderStatus(model, order, status, {
       actor: 'admin',
       fulfillment: 'pickup',
@@ -86,6 +92,70 @@ test('pickup orders follow Pending to Accepted to Out for Delivery to Delivered'
     assert.equal(result.order.items[0].deliveryStatus, status);
   }
   assert.ok(order.firstDeliveredAt);
+});
+
+test('pickup permits direct Pending to Delivered and Accepted to Delivered transitions', async () => {
+  for (const startingStatus of ['PENDING', 'ACCEPTED']) {
+    const order = makeOrder({
+      status: startingStatus,
+      deliveryStatusDate: null,
+      subscriptionStartDate: null,
+      subscriptionEndDate: null,
+      deliveryMemberId: null,
+      items: [{ fulfillment: 'pickup', deliveryStatus: startingStatus }]
+    });
+    const result = await transitionOrderStatus(modelFor(order), order, 'DELIVERED', {
+      actor: 'admin',
+      fulfillment: 'pickup'
+    });
+
+    assert.equal(result.order.status, 'DELIVERED');
+    assert.equal(result.order.items[0].deliveryStatus, 'DELIVERED');
+    assert.ok(order.firstDeliveredAt);
+  }
+});
+
+test('Delivered pickup status is permanently locked and customer actors cannot change it', async () => {
+  for (const nextStatus of ['PENDING', 'ACCEPTED']) {
+    const deliveredOrder = makeOrder({
+      status: 'DELIVERED',
+      deliveryStatusDate: null,
+      subscriptionStartDate: null,
+      subscriptionEndDate: null,
+      deliveryMemberId: null,
+      items: [{ fulfillment: 'pickup', deliveryStatus: 'DELIVERED' }]
+    });
+    const result = await transitionOrderStatus(modelFor(deliveredOrder), deliveredOrder, nextStatus, {
+      actor: 'admin',
+      fulfillment: 'pickup'
+    });
+    assert.equal(result.error.status, 409);
+  }
+
+  const pendingOrder = makeOrder({
+    status: 'PENDING',
+    deliveryStatusDate: null,
+    items: [{ fulfillment: 'pickup', deliveryStatus: 'PENDING' }]
+  });
+  const customerUpdate = await transitionOrderStatus(modelFor(pendingOrder), pendingOrder, 'ACCEPTED', {
+    actor: 'customer',
+    fulfillment: 'pickup'
+  });
+  assert.equal(customerUpdate.error.status, 403);
+});
+
+test('pickup status updates guard the latest item status in the atomic database filter', async () => {
+  const order = makeOrder({
+    status: 'ACCEPTED',
+    deliveryStatusDate: null,
+    items: [{ fulfillment: 'pickup', deliveryStatus: 'ACCEPTED' }]
+  });
+  const model = modelFor(order);
+
+  await transitionOrderStatus(model, order, 'PENDING', { actor: 'admin', fulfillment: 'pickup' });
+  assert.deepEqual(model.calls[0].filter.items, {
+    $elemMatch: { fulfillment: 'pickup', deliveryStatus: 'ACCEPTED' }
+  });
 });
 
 test('delivering a pickup component does not mark the delivery component as revenue-delivered', async () => {

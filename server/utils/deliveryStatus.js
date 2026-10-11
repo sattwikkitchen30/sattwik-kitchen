@@ -1,4 +1,4 @@
-const { formatDateKey, getSubscriptionServiceDates, isServiceDay } = require('./tiffinPreparation');
+const { formatDateKey, getSubscriptionServiceDates, isServiceDay, startOfDay } = require('./tiffinPreparation');
 
 function getOrderServiceDates(order) {
   if (!order?.subscriptionStartDate) return [];
@@ -9,9 +9,14 @@ function getOrderServiceDates(order) {
 }
 
 function getCurrentServiceDate(order, now = new Date()) {
-  if (!isServiceDay(now)) return null;
+  if (!order?.subscriptionStartDate || !isServiceDay(now)) return null;
   const todayKey = formatDateKey(now);
-  return getOrderServiceDates(order).find((date) => formatDateKey(date) === todayKey) || null;
+  const startKey = formatDateKey(order.subscriptionStartDate);
+  if (!todayKey || !startKey || todayKey < startKey) return null;
+  const endDate = order.subscriptionEndDate || getSubscriptionServiceDates(order.subscriptionStartDate).endDate;
+  const endKey = formatDateKey(endDate);
+  if (endKey && todayKey > endKey) return null;
+  return startOfDay(now);
 }
 
 function resolveDeliveryStatus(order, now = new Date()) {

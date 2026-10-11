@@ -1,51 +1,95 @@
 const { TIFFIN_MENU_BY_WEEKDAY } = require('./constants');
 const { buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('./tiffinItems');
 
+const BUSINESS_TIMEZONE = 'Asia/Kolkata';
+const BUSINESS_OFFSET = '+05:30';
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const SERVICE_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+function pad(value, size = 2) {
+  return String(value).padStart(size, '0');
+}
+
+function zonedDateTime(year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0) {
+  return new Date(`${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:${pad(second)}.${pad(millisecond, 3)}${BUSINESS_OFFSET}`);
+}
+
+function getZonedParts(dateValue = new Date()) {
+  const date = getLocalDate(dateValue);
+  if (!date) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BUSINESS_TIMEZONE,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23'
+  }).formatToParts(date);
+  const read = (type) => parts.find((part) => part.type === type)?.value;
+  return {
+    weekday: read('weekday'),
+    year: Number(read('year')),
+    month: Number(read('month')),
+    day: Number(read('day')),
+    hour: Number(read('hour')),
+    minute: Number(read('minute')),
+    second: Number(read('second'))
+  };
+}
+
 function getLocalDate(dateValue = new Date()) {
-  const value = dateValue instanceof Date ? dateValue : new Date(dateValue);
-  if (Number.isNaN(value.getTime())) return null;
-  return value;
+  if (dateValue instanceof Date) {
+    return Number.isNaN(dateValue.getTime()) ? null : dateValue;
+  }
+  if (typeof dateValue === 'string') {
+    const trimmed = dateValue.trim();
+    if (!trimmed) return null;
+    const dateOnly = DATE_ONLY_PATTERN.exec(trimmed);
+    if (dateOnly) {
+      return zonedDateTime(Number(dateOnly[1]), Number(dateOnly[2]), Number(dateOnly[3]), 12);
+    }
+    const parsed = new Date(trimmed);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const value = new Date(dateValue);
+  return Number.isNaN(value.getTime()) ? null : value;
 }
 
 function formatDateKey(dateValue) {
-  const date = getLocalDate(dateValue);
-  if (!date) return null;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const parts = getZonedParts(dateValue);
+  if (!parts) return null;
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
 }
 
 function parseDateInput(value, fallback = new Date()) {
   if (!value && value !== 0) return getLocalDate(fallback);
-  if (value instanceof Date) return getLocalDate(value);
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return getLocalDate(fallback);
-    const date = new Date(`${trimmed}T12:00:00`);
-    if (!Number.isNaN(date.getTime())) return date;
-  }
-  return getLocalDate(fallback);
+  const parsed = getLocalDate(value);
+  return parsed || getLocalDate(fallback);
 }
 
 function addDays(dateValue, days) {
-  const date = getLocalDate(dateValue);
-  if (!date) return null;
-  const next = new Date(date);
-  next.setDate(next.getDate() + Number(days || 0));
-  return next;
+  const parts = getZonedParts(dateValue);
+  if (!parts) return null;
+  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + Number(days || 0), 12));
+  return zonedDateTime(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth() + 1,
+    shifted.getUTCDate(),
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
 }
 
 function getWeekdayName(dateValue) {
-  const date = getLocalDate(dateValue);
-  if (!date) return null;
-  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  return names[date.getDay()];
+  return getZonedParts(dateValue)?.weekday || null;
 }
 
 function isServiceDay(dateValue) {
-  const day = getWeekdayName(dateValue);
-  return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].includes(day);
+  return SERVICE_WEEKDAYS.includes(getWeekdayName(dateValue));
 }
 
 function getMenuForDate(dateValue) {
@@ -56,7 +100,13 @@ function getMenuForDate(dateValue) {
 function dateLabel(dateValue) {
   const date = getLocalDate(dateValue);
   if (!date) return '—';
-  return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(date);
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: BUSINESS_TIMEZONE,
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  }).format(date);
 }
 
 function getSubscriptionServiceDates(startDateValue, endDateValue = null) {
@@ -66,13 +116,13 @@ function getSubscriptionServiceDates(startDateValue, endDateValue = null) {
   }
 
   const serviceDates = [];
-  const cursor = new Date(start);
+  let cursor = start;
   while (serviceDates.length < 20) {
     if (isServiceDay(cursor)) {
-      serviceDates.push(new Date(cursor));
+      serviceDates.push(startOfDay(cursor));
     }
-    cursor.setDate(cursor.getDate() + 1);
-    if (cursor.getTime() - start.getTime() > 1000 * 60 * 60 * 24 * 365) {
+    cursor = addDays(cursor, 1);
+    if (!cursor || cursor.getTime() - start.getTime() > 1000 * 60 * 60 * 24 * 365) {
       break;
     }
   }
@@ -91,19 +141,15 @@ function getSubscriptionServiceDates(startDateValue, endDateValue = null) {
 }
 
 function startOfDay(dateValue) {
-  const date = getLocalDate(dateValue);
-  if (!date) return null;
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  return start;
+  const parts = getZonedParts(dateValue);
+  if (!parts) return null;
+  return zonedDateTime(parts.year, parts.month, parts.day, 0, 0, 0, 0);
 }
 
 function endOfDay(dateValue) {
-  const date = getLocalDate(dateValue);
-  if (!date) return null;
-  const end = new Date(date);
-  end.setHours(23, 59, 59, 999);
-  return end;
+  const parts = getZonedParts(dateValue);
+  if (!parts) return null;
+  return zonedDateTime(parts.year, parts.month, parts.day, 23, 59, 59, 999);
 }
 
 function buildPreparationTotals(subscriptions = []) {
@@ -206,6 +252,7 @@ async function syncExpiredTiffinSubscriptions(now = new Date()) {
 }
 
 module.exports = {
+  BUSINESS_TIMEZONE,
   getLocalDate,
   formatDateKey,
   parseDateInput,

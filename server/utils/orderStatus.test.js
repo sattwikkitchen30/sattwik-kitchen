@@ -197,6 +197,17 @@ test('cancellation is permitted before delivery but delivered and cancelled orde
   assert.equal(rejectCancelledDelivery.error.status, 409);
 });
 
+test('admin can advance a Monday delivery whose start date is today even when UTC is still Sunday', async () => {
+  const order = makeOrder();
+  const mondayMorningIst = new Date('2026-10-11T18:38:00.000Z');
+  const result = await transitionOrderStatus(modelFor(order), order, 'OUT_FOR_DELIVERY', {
+    actor: 'admin',
+    now: mondayMorningIst
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.order.status, 'OUT_FOR_DELIVERY');
+});
+
 test('delivery-member updates are scoped to their assignment and status races fail closed', async () => {
   const order = makeOrder();
   const model = modelFor(order);

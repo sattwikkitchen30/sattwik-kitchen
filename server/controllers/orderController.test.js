@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
-const { buildPreparationTotals } = require('../utils/tiffinPreparation');
+const { buildPreparationTotals, formatDateKey } = require('../utils/tiffinPreparation');
 
 function loadController(overrides) {
   const dependencies = {
@@ -368,11 +368,8 @@ test('orders API filters delivery by local start date and includes status aliase
   }
 
   const match = captured.find((stage) => stage.$match?.$and)?.$match;
-  assert.equal(match.subscriptionStartDate.$gte.getFullYear(), 2026);
-  assert.equal(match.subscriptionStartDate.$gte.getMonth(), 9);
-  assert.equal(match.subscriptionStartDate.$gte.getDate(), 12);
-  assert.equal(match.subscriptionStartDate.$gte.getHours(), 0);
-  assert.equal(match.subscriptionStartDate.$lt.getDate(), 13);
+  assert.equal(formatDateKey(match.subscriptionStartDate.$gte), '2026-10-12');
+  assert.equal(formatDateKey(match.subscriptionStartDate.$lt), '2026-10-13');
   const searchFields = match.$and.flatMap((condition) => condition.$or || []);
   assert.ok(searchFields.some((condition) => condition.status?.test('OUT_FOR_DELIVERY')));
   assert.ok(searchFields.some((condition) => condition['items.deliveryStatus']?.test('OUT_FOR_DELIVERY')));
@@ -398,9 +395,7 @@ test('orders API filters pickup by pickup date and maps Pickup Completed to deli
   }
 
   const match = captured.find((stage) => stage.$match?.$and)?.$match;
-  assert.equal(match.pickupDate.$gte.getFullYear(), 2026);
-  assert.equal(match.pickupDate.$gte.getMonth(), 9);
-  assert.equal(match.pickupDate.$gte.getDate(), 12);
+  assert.equal(formatDateKey(match.pickupDate.$gte), '2026-10-12');
   const searchFields = match.$and.flatMap((condition) => condition.$or || []);
   assert.ok(searchFields.some((condition) => condition.status?.test('DELIVERED')));
   assert.ok(captured.some((stage) => stage.$match?.$or?.some((condition) => condition['items.fulfillment'] === 'pickup')));

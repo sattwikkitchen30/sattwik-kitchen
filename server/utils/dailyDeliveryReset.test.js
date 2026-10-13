@@ -9,10 +9,10 @@ test('resets an active delivered subscription once on the next service day and p
     type: 'tiffin',
     status: 'DELIVERED',
     deliveryMemberId: 'member-id',
-    subscriptionStartDate: new Date(2026, 9, 12),
-    subscriptionEndDate: new Date(2026, 10, 6),
-    deliveryStatusDate: new Date(2026, 9, 12),
-    firstDeliveredAt: new Date(2026, 9, 12, 15),
+    subscriptionStartDate: new Date('2026-10-12T07:00:00Z'),
+    subscriptionEndDate: new Date('2026-11-06T08:00:00Z'),
+    deliveryStatusDate: new Date('2026-10-12T07:00:00Z'),
+    firstDeliveredAt: new Date('2026-10-12T22:00:00Z'),
     items: [{ fulfillment: 'delivery', deliveryStatus: 'DELIVERED' }]
   };
   let query;
@@ -29,7 +29,7 @@ test('resets an active delivered subscription once on the next service day and p
       return { lean: async () => ({ ...order, items: order.items.map((item) => ({ ...item })) }) };
     }
   };
-  const now = new Date(2026, 9, 13, 0, 5);
+  const now = new Date('2026-10-13T07:05:00Z');
 
   const resetCount = await resetDeliveredOrders(Order, { now });
   assert.equal(resetCount, 1);
@@ -37,7 +37,7 @@ test('resets an active delivered subscription once on the next service day and p
   assert.equal(order.items[0].deliveryStatus, 'ACCEPTED');
   assert.equal(order.deliveryMemberId, 'member-id');
   assert.equal(order.orderId, 'permanent-order-id');
-  assert.equal(order.firstDeliveredAt.getDate(), 12);
+  assert.equal(order.firstDeliveredAt.getUTCDate(), 12);
   assert.equal(query.status.$in.includes('CANCELLED'), false);
   assert.equal(await resetDeliveredOrders(Order, { now }), 0);
 });
@@ -46,6 +46,6 @@ test('skips weekends without querying orders', async () => {
   let queried = false;
   const Order = { find() { queried = true; throw new Error('must not query on weekend'); } };
 
-  assert.equal(await resetDeliveredOrders(Order, { now: new Date(2026, 9, 17, 12) }), 0);
+  assert.equal(await resetDeliveredOrders(Order, { now: new Date('2026-10-17T19:00:00Z') }), 0);
   assert.equal(queried, false);
 });

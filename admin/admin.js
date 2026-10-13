@@ -109,15 +109,6 @@ if (loginForm) {
 
 if (window.location.pathname.endsWith('/dashboard.html')) {
   loadProfile();
-  const scheduleServiceDayRefresh = () => {
-    const nextMidnight = new Date();
-    nextMidnight.setHours(24, 0, 0, 50);
-    window.setTimeout(() => {
-      if (state.ordersFulfillment === 'delivery') renderOrdersTable();
-      scheduleServiceDayRefresh();
-    }, nextMidnight.getTime() - Date.now());
-  };
-  scheduleServiceDayRefresh();
 
   const navButtons = document.querySelectorAll('.nav-item');
   const views = document.querySelectorAll('.view-panel');
@@ -175,8 +166,17 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
 
 function getLocalDateString(date = new Date()) {
   const value = new Date(date);
-  const offset = value.getTimezoneOffset();
-  return new Date(value.getTime() - offset * 60000).toISOString().slice(0, 10);
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Vancouver',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  });
+  const parts = formatter.formatToParts(value);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function currency(value) {
@@ -230,7 +230,7 @@ function renderPickupStatusControl(orderId, status, canCancel = true) {
 function dateLabel(date) {
   const d = new Date(date);
   if (Number.isNaN(d.valueOf())) return '—';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/Vancouver' });
 }
 
 function pickupDateLabel(value) {
@@ -248,7 +248,17 @@ function toDateOnly(dateValue) {
   } else {
     const value = new Date(dateValue);
     if (!Number.isNaN(value.getTime())) {
-      dateKey = `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Vancouver',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
+      });
+      const parts = formatter.formatToParts(value);
+      const year = parts.find(p => p.type === 'year')?.value;
+      const month = parts.find(p => p.type === 'month')?.value;
+      const day = parts.find(p => p.type === 'day')?.value;
+      dateKey = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     }
   }
   if (!dateKey) return null;
@@ -485,8 +495,9 @@ function bindTiffinPreparationControls() {
   const prevDayBtn = document.getElementById('prepPrevDay');
   if (prevDayBtn) {
     prevDayBtn.addEventListener('click', () => {
-      const date = new Date(`${state.tiffinPreparationDate || getLocalDateString(new Date())}T12:00:00`);
-      date.setDate(date.getDate() - 1);
+      const dateStr = state.tiffinPreparationDate || getLocalDateString(new Date());
+      const date = new Date(`${dateStr}T12:00:00Z`);
+      date.setUTCDate(date.getUTCDate() - 1);
       loadTiffinPreparation(getLocalDateString(date));
     });
   }
@@ -494,8 +505,9 @@ function bindTiffinPreparationControls() {
   const nextDayBtn = document.getElementById('prepNextDay');
   if (nextDayBtn) {
     nextDayBtn.addEventListener('click', () => {
-      const date = new Date(`${state.tiffinPreparationDate || getLocalDateString(new Date())}T12:00:00`);
-      date.setDate(date.getDate() + 1);
+      const dateStr = state.tiffinPreparationDate || getLocalDateString(new Date());
+      const date = new Date(`${dateStr}T12:00:00Z`);
+      date.setUTCDate(date.getUTCDate() + 1);
       loadTiffinPreparation(getLocalDateString(date));
     });
   }
@@ -721,7 +733,7 @@ async function renderOrdersTable() {
           const escapedCustomerName = escHtml(customerName);
           const escapedPhone = escHtml(customer.phone || '—');
           const escapedEmail = escHtml(customer.email || '—');
-          const orderDateTime = new Date(order.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+          const orderDateTime = new Date(order.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Vancouver' });
           const deliveryAssignment = state.ordersFulfillment === 'delivery' ? `
             <td><select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
               <option value="">Unassigned</option>

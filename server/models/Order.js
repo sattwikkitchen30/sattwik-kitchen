@@ -69,8 +69,9 @@ orderSchema.index(
 
 orderSchema.pre('validate', async function () {
   if (!this.orderId) {
+    const { formatDateKey } = require('../utils/tiffinPreparation');
     const date = this.placedAt || this.createdAt || new Date();
-    const dayKey = `${String(date.getUTCFullYear()).slice(-2)}${String(date.getUTCMonth() + 1).padStart(2, '0')}${String(date.getUTCDate()).padStart(2, '0')}`;
+    const dayKey = formatDateKey(date).replace(/-/g, '').slice(2);
     const OrderCounter = require('./OrderCounter');
     let counter;
     try {

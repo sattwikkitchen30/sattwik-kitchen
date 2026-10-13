@@ -1,6 +1,9 @@
+const { DateTime } = require('luxon');
 const { addDays, endOfDay, formatDateKey, isServiceDay, startOfDay } = require('./tiffinPreparation');
 const { getCurrentServiceDate } = require('./deliveryStatus');
 const { emitOrderUpdate } = require('./orderEvents');
+
+const BUSINESS_TIMEZONE = process.env.BUSINESS_TIMEZONE || 'America/Vancouver';
 
 async function resetDeliveredOrders(Order, { now = new Date(), app } = {}) {
   if (!isServiceDay(now)) return 0;
@@ -62,8 +65,12 @@ function startDailyDeliveryReset(Order, app, { now = () => new Date(), setTimeou
     }
     if (stopped) return;
     const currentTime = now();
-    const nextRun = addDays(startOfDay(currentTime), 1);
-    nextRun.setSeconds(5, 0);
+    const vancouverNow = DateTime.fromJSDate(currentTime).setZone(BUSINESS_TIMEZONE);
+    const nextServiceDay = vancouverNow.plus({ days: 1 }).startOf('day');
+    while (!isServiceDay(nextServiceDay.toJSDate())) {
+      nextServiceDay = nextServiceDay.plus({ days: 1 });
+    }
+    const nextRun = nextServiceDay.set({ second: 5, millisecond: 0 }).toJSDate();
     timer = setTimeoutFn(run, Math.max(1000, nextRun.getTime() - currentTime.getTime()));
     timer.unref?.();
   };

@@ -46,7 +46,7 @@ function orderCard(order) {
   const actionText = { OUT_FOR_DELIVERY: 'Start Delivery', DELIVERED: 'Mark as Delivered' }[next];
   const customer = order.customer || {};
   const activeLabel = ['ACCEPTED', 'OUT_FOR_DELIVERY'].includes(order.status) ? '<strong class="active-delivery-label">MY ACTIVE DELIVERY</strong>' : '';
-  const acceptedTime = order.acceptedAt ? `<div><strong>Accepted</strong><br>${new Date(order.acceptedAt).toLocaleString()}</div>` : '';
+  const acceptedTime = order.acceptedAt ? `<div><strong>Accepted</strong><br>${new Date(order.acceptedAt).toLocaleString('en-US', { timeZone: 'America/Vancouver' })}</div>` : '';
   const terminal = ['DELIVERED', 'CANCELLED'].includes(order.status) || Boolean(order.firstDeliveredAt || order.deliveredAt);
   return `<article class="delivery-order assigned-delivery" data-delivery-order="${escapeHtml(order._id)}">${activeLabel}<div class="delivery-order-head"><div><h2>${escapeHtml(order.orderId)}</h2><p>${escapeHtml(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())} • ${escapeHtml(customer.phone || '')}<br>${escapeHtml(customer.email || '')}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${escapeHtml(order.deliveryAddress || customer.address || customer.area || 'Not provided')}</div><div><strong>Current status</strong><br>${escapeHtml(deliveryStatusLabel(order.status))}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${escapeHtml(order._id)}" data-next-status="${escapeHtml(next || '')}" ${next ? '' : 'disabled'}>${escapeHtml(actionText || 'Complete')}</button><button type="button" data-cancel-delivery="${escapeHtml(order._id)}" ${terminal ? 'disabled' : ''}>Cancel Order</button></div></article>`;
 }
@@ -78,15 +78,7 @@ async function loadDeliveryOrders() {
   } catch (error) { deliveryMessage.textContent = error.message; }
 }
 
-function scheduleServiceDayRefresh() {
-  const nextMidnight = new Date();
-  nextMidnight.setHours(24, 0, 0, 50);
-  window.setTimeout(() => {
-    loadDeliveryOrders();
-    scheduleServiceDayRefresh();
-  }, nextMidnight.getTime() - Date.now());
-}
-if (!isDeliveryLogin) scheduleServiceDayRefresh();
+if (!isDeliveryLogin) loadDeliveryOrders();
 
 document.getElementById('deliveryLogout')?.addEventListener('click', () => { localStorage.removeItem('sattwikDeliveryToken'); localStorage.removeItem('sattwikDeliveryMember'); window.location.href = '/delivery/login.html'; });
 
@@ -139,5 +131,4 @@ if (!isDeliveryLogin) {
   deliveryApi('/delivery-auth/me').then((data) => { document.getElementById('memberName').textContent = data.member.name; }).catch(() => { localStorage.removeItem('sattwikDeliveryToken'); window.location.href = '/delivery/login.html'; });
   const socket = window.io ? io({ auth: { token: deliveryToken } }) : null;
   socket?.on('order:updated', loadDeliveryOrders);
-  loadDeliveryOrders();
 }

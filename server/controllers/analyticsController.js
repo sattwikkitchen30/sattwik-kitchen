@@ -6,11 +6,12 @@ const TiffinMenuSelection = require('../models/TiffinMenuSelection');
 const { dateMatch, TIFFIN_MENU_BY_WEEKDAY } = require('../utils/constants');
 const { parseDateInput, formatDateKey, getWeekdayName, getMenuForDate, dateLabel, startOfDay, endOfDay, buildPreparationTotals, buildActivePlanCounts, syncExpiredTiffinSubscriptions } = require('../utils/tiffinPreparation');
 const { filterTiffinPreparationSubscriptions } = require('../utils/deliveryStatus');
+const { dateMatch: timezoneAwareDateMatch } = require('../utils/dateFilter');
 
 const money = (n) => Math.round((n || 0) * 100) / 100;
 
 function basePipeline(query = {}) {
-  const match = { ...dateMatch(query) };
+  const match = { ...timezoneAwareDateMatch(query) };
   if (query.status) match.status = query.status;
   if (query.type) match.type = query.type;
 
@@ -235,12 +236,13 @@ async function overview(req, res) {
 async function revenue(req, res) {
   const group = ['day', 'week', 'month'].includes(req.query.group) ? req.query.group : 'day';
   const format = group === 'day' ? '%Y-%m-%d' : group === 'month' ? '%Y-%m' : '%Y-W%V';
+  const timezone = 'America/Vancouver';
 
   const rows = await Order.aggregate([
     ...basePipeline(req.query),
     {
       $group: {
-        _id: { $dateToString: { format, date: '$createdAt' } },
+        _id: { $dateToString: { format, date: '$createdAt', timezone } },
         revenue: { $sum: revenueExpression() },
         orders: { $sum: 1 }
       }

@@ -44,9 +44,22 @@ function loadController(overrides) {
 }
 
 function futureDateKey() {
-  const date = new Date();
-  date.setDate(date.getDate() + 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Vancouver',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  });
+  const parts = formatter.formatToParts(new Date());
+  const year = Number(parts.find(p => p.type === 'year')?.value);
+  const month = Number(parts.find(p => p.type === 'month')?.value);
+  const day = Number(parts.find(p => p.type === 'day')?.value);
+  const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+  const nextParts = formatter.formatToParts(nextDay);
+  const nextYear = nextParts.find(p => p.type === 'year')?.value;
+  const nextMonth = nextParts.find(p => p.type === 'month')?.value;
+  const nextDayValue = nextParts.find(p => p.type === 'day')?.value;
+  return `${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(nextDayValue).padStart(2, '0')}`;
 }
 
 async function submitPlans(tiffinPlans, { failAtSubscription, state = {}, customerId = new mongoose.Types.ObjectId(), accountCustomer, checkoutCustomer } = {}) {
@@ -333,6 +346,7 @@ test('orders API applies creation-time range, case-insensitive search, and fulfi
   const matchStages = pipeline.filter((stage) => stage.$match);
   const searchMatch = matchStages.find((stage) => stage.$match.$and);
   assert.ok(searchMatch);
+  // createdFrom and createdTo are timestamp fields, not calendar dates, so they use the provided UTC timestamps
   assert.equal(searchMatch.$match.createdAt.$gte.toISOString(), '2026-10-11T18:30:00.000Z');
   assert.equal(searchMatch.$match.createdAt.$lt.toISOString(), '2026-10-12T18:30:00.000Z');
   const orGroups = searchMatch.$match.$and.map((condition) => condition.$or).filter(Boolean);

@@ -10,6 +10,7 @@ const { getOrderServiceDates, getCurrentServiceDate, resolveDeliveryStatus, appl
 const { PREPARATION_TYPES, TIFFIN_PREPARATION_ITEMS, getTiffinPreparationType, buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('../utils/tiffinItems');
 const { getOrderCustomer } = require('../utils/orderCustomer');
 const { normalizeStatus, transitionOrderStatus } = require('../utils/orderStatus');
+const { parseDateOnly } = require('../utils/dateFilter');
 
 function extractOrderFulfillment(orderItems = []) {
   if (!orderItems.length) return 'pickup';
@@ -442,8 +443,19 @@ async function listOrders(req, res) {
   if (status) match.status = new RegExp(`^${status}$`, 'i');
   if (type) match.type = type;
   const createdAt = {};
-  if (from) createdAt.$gte = new Date(from + 'T00:00:00.000Z');
-  if (to) createdAt.$lte = new Date(to + 'T23:59:59.999Z');
+  if (from) {
+    const fromDate = parseDateOnly(from);
+    if (fromDate) {
+      createdAt.$gte = startOfDay(fromDate);
+    }
+  }
+  if (to) {
+    const toDate = parseDateOnly(to);
+    if (toDate) {
+      const nextDay = addDays(toDate, 1);
+      createdAt.$lt = startOfDay(nextDay);
+    }
+  }
   if (createdFrom) {
     const date = new Date(createdFrom);
     if (Number.isNaN(date.getTime())) return res.status(400).json({ message: 'Invalid order creation start time.' });

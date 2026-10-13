@@ -6,7 +6,7 @@ const deliveryStatusSteps = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVER
 if (!token) window.location.href = `/customer/login.html?return=${encodeURIComponent('/customer/orders.html')}`;
 
 function money(value) { return `$${Number(value || 0).toFixed(2)}`; }
-function dateLabel(value) { return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
+function dateLabel(value) { return new Date(value).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Vancouver' }); }
 function pickupDateLabel(value) {
   if (!value) return '—';
   const dateKey = String(value).slice(0, 10);
@@ -223,15 +223,6 @@ socket?.on('order:updated', (updatedOrder) => {
 });
 
 loadOrders();
-function scheduleServiceDayRefresh() {
-  const nextMidnight = new Date();
-  nextMidnight.setHours(24, 0, 0, 50);
-  window.setTimeout(() => {
-    loadOrders();
-    scheduleServiceDayRefresh();
-  }, nextMidnight.getTime() - Date.now());
-}
-scheduleServiceDayRefresh();
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) loadOrders();
 });

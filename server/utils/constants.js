@@ -75,15 +75,10 @@ function tiffinDisplayName(packageType, size) {
   return `Tiffin Plan — ${p} (${s})`.replace(' ()', '');
 }
 
+const { dateMatch: timezoneAwareDateMatch } = require('./dateFilter');
+
 function dateMatch(query = {}) {
-  const { from, to } = query;
-  const match = {};
-  if (from || to) {
-    match.createdAt = {};
-    if (from) match.createdAt.$gte = new Date(from + 'T00:00:00.000Z');
-    if (to) match.createdAt.$lte = new Date(to + 'T23:59:59.999Z');
-  }
-  return match;
+  return timezoneAwareDateMatch(query);
 }
 
 module.exports = {

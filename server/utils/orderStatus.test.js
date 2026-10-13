@@ -7,9 +7,9 @@ function makeOrder(overrides = {}) {
     _id: 'order-1',
     orderId: 'permanent-id',
     status: 'ACCEPTED',
-    deliveryStatusDate: new Date(2026, 9, 12),
-    subscriptionStartDate: new Date(2026, 9, 12),
-    subscriptionEndDate: new Date(2026, 10, 6),
+    deliveryStatusDate: new Date('2026-10-12T07:00:00Z'),
+    subscriptionStartDate: new Date('2026-10-12T07:00:00Z'),
+    subscriptionEndDate: new Date('2026-11-06T08:00:00Z'),
     deliveryMemberId: 'member-1',
     items: [{ fulfillment: 'delivery', deliveryStatus: 'ACCEPTED' }],
     ...overrides
@@ -50,7 +50,7 @@ function modelFor(order) {
 test('delivery order follows Accepted to Out for Delivery to Delivered and preserves first delivery', async () => {
   const order = makeOrder();
   const model = modelFor(order);
-  const firstDay = new Date(2026, 9, 12, 12);
+  const firstDay = new Date('2026-10-12T19:00:00Z');
 
   const outForDelivery = await transitionOrderStatus(model, order, 'OUT_FOR_DELIVERY', { actor: 'admin', now: firstDay });
   assert.equal(outForDelivery.order.status, 'OUT_FOR_DELIVERY');
@@ -60,9 +60,9 @@ test('delivery order follows Accepted to Out for Delivery to Delivered and prese
   assert.ok(firstDeliveredAt);
 
   order.status = 'ACCEPTED';
-  order.deliveryStatusDate = new Date(2026, 9, 13);
+  order.deliveryStatusDate = new Date('2026-10-13T07:00:00Z');
   order.items[0].deliveryStatus = 'ACCEPTED';
-  const nextDay = new Date(2026, 9, 13, 12);
+  const nextDay = new Date('2026-10-13T19:00:00Z');
   await transitionOrderStatus(model, order, 'OUT_FOR_DELIVERY', { actor: 'delivery', now: nextDay });
   await transitionOrderStatus(model, order, 'DELIVERED', { actor: 'delivery', now: nextDay });
 
@@ -167,7 +167,7 @@ test('delivering a pickup component does not mark the delivery component as reve
     ]
   });
   const model = modelFor(order);
-  const now = new Date(2026, 9, 12, 12);
+  const now = new Date('2026-10-12T19:00:00Z');
 
   await transitionOrderStatus(model, order, 'OUT_FOR_DELIVERY', { fulfillment: 'pickup', now });
   await transitionOrderStatus(model, order, 'DELIVERED', { fulfillment: 'pickup', now });
@@ -199,10 +199,10 @@ test('cancellation is permitted before delivery but delivered and cancelled orde
 
 test('admin can advance a Monday delivery whose start date is today even when UTC is still Sunday', async () => {
   const order = makeOrder();
-  const mondayMorningIst = new Date('2026-10-11T18:38:00.000Z');
+  const mondayMorningVancouver = new Date('2026-10-12T07:00:00.000Z');
   const result = await transitionOrderStatus(modelFor(order), order, 'OUT_FOR_DELIVERY', {
     actor: 'admin',
-    now: mondayMorningIst
+    now: mondayMorningVancouver
   });
   assert.equal(result.error, undefined);
   assert.equal(result.order.status, 'OUT_FOR_DELIVERY');
@@ -214,14 +214,14 @@ test('delivery-member updates are scoped to their assignment and status races fa
   const unauthorized = await transitionOrderStatus(model, order, 'OUT_FOR_DELIVERY', {
     actor: 'delivery',
     accessFilter: { deliveryMemberId: 'another-member' },
-    now: new Date(2026, 9, 12, 12)
+    now: new Date('2026-10-12T19:00:00Z')
   });
   assert.equal(unauthorized.error.status, 409);
 
   const racingModel = { findOneAndUpdate: () => ({ lean: async () => null }) };
   const race = await transitionOrderStatus(racingModel, order, 'OUT_FOR_DELIVERY', {
     actor: 'admin',
-    now: new Date(2026, 9, 12, 12)
+    now: new Date('2026-10-12T19:00:00Z')
   });
   assert.equal(race.error.status, 409);
 });

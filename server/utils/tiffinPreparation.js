@@ -1,8 +1,8 @@
+const { DateTime } = require('luxon');
 const { TIFFIN_MENU_BY_WEEKDAY } = require('./constants');
 const { buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('./tiffinItems');
 
-const BUSINESS_TIMEZONE = 'Asia/Kolkata';
-const BUSINESS_OFFSET = '+05:30';
+const BUSINESS_TIMEZONE = process.env.BUSINESS_TIMEZONE || 'America/Vancouver';
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const SERVICE_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
@@ -10,58 +10,49 @@ function pad(value, size = 2) {
   return String(value).padStart(size, '0');
 }
 
-function zonedDateTime(year, month, day, hour = 0, minute = 0, second = 0, millisecond = 0) {
-  return new Date(`${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}:${pad(second)}.${pad(millisecond, 3)}${BUSINESS_OFFSET}`);
+function toVancouverDateTime(dateValue) {
+  if (!dateValue) return null;
+  if (typeof dateValue === 'string' && DATE_ONLY_PATTERN.test(dateValue)) {
+    return DateTime.fromISO(dateValue, { zone: BUSINESS_TIMEZONE }).set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+  }
+  if (dateValue instanceof Date) {
+    return DateTime.fromJSDate(dateValue).setZone(BUSINESS_TIMEZONE);
+  }
+  return DateTime.fromJSDate(new Date(dateValue)).setZone(BUSINESS_TIMEZONE);
+}
+
+function toJSDate(vancouverDateTime) {
+  if (!vancouverDateTime) return null;
+  return vancouverDateTime.toJSDate();
 }
 
 function getZonedParts(dateValue = new Date()) {
-  const date = getLocalDate(dateValue);
-  if (!date) return null;
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: BUSINESS_TIMEZONE,
-    weekday: 'long',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-    hourCycle: 'h23'
-  }).formatToParts(date);
-  const read = (type) => parts.find((part) => part.type === type)?.value;
+  const dt = toVancouverDateTime(dateValue);
+  if (!dt || !dt.isValid) return null;
   return {
-    weekday: read('weekday'),
-    year: Number(read('year')),
-    month: Number(read('month')),
-    day: Number(read('day')),
-    hour: Number(read('hour')),
-    minute: Number(read('minute')),
-    second: Number(read('second'))
+    weekday: dt.toFormat('EEEE'),
+    year: dt.year,
+    month: dt.month,
+    day: dt.day,
+    hour: dt.hour,
+    minute: dt.minute,
+    second: dt.second
   };
 }
 
 function getLocalDate(dateValue = new Date()) {
-  if (dateValue instanceof Date) {
-    return Number.isNaN(dateValue.getTime()) ? null : dateValue;
-  }
-  if (typeof dateValue === 'string') {
-    const trimmed = dateValue.trim();
-    if (!trimmed) return null;
-    const dateOnly = DATE_ONLY_PATTERN.exec(trimmed);
-    if (dateOnly) {
-      return zonedDateTime(Number(dateOnly[1]), Number(dateOnly[2]), Number(dateOnly[3]), 12);
-    }
-    const parsed = new Date(trimmed);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-  const value = new Date(dateValue);
-  return Number.isNaN(value.getTime()) ? null : value;
+  const dt = toVancouverDateTime(dateValue);
+  if (!dt || !dt.isValid) return null;
+  return dt.toJSDate();
 }
 
 function formatDateKey(dateValue) {
-  const parts = getZonedParts(dateValue);
-  if (!parts) return null;
-  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
+  if (typeof dateValue === 'string' && DATE_ONLY_PATTERN.test(dateValue)) {
+    return dateValue;
+  }
+  const dt = toVancouverDateTime(dateValue);
+  if (!dt || !dt.isValid) return null;
+  return dt.toFormat('yyyy-MM-dd');
 }
 
 function parseDateInput(value, fallback = new Date()) {
@@ -71,21 +62,16 @@ function parseDateInput(value, fallback = new Date()) {
 }
 
 function addDays(dateValue, days) {
-  const parts = getZonedParts(dateValue);
-  if (!parts) return null;
-  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + Number(days || 0), 12));
-  return zonedDateTime(
-    shifted.getUTCFullYear(),
-    shifted.getUTCMonth() + 1,
-    shifted.getUTCDate(),
-    parts.hour,
-    parts.minute,
-    parts.second
-  );
+  const dt = toVancouverDateTime(dateValue);
+  if (!dt || !dt.isValid) return null;
+  const shifted = dt.plus({ days: Number(days || 0) });
+  return shifted.toJSDate();
 }
 
 function getWeekdayName(dateValue) {
-  return getZonedParts(dateValue)?.weekday || null;
+  const dt = toVancouverDateTime(dateValue);
+  if (!dt || !dt.isValid) return null;
+  return dt.toFormat('EEEE');
 }
 
 function isServiceDay(dateValue) {
@@ -141,15 +127,15 @@ function getSubscriptionServiceDates(startDateValue, endDateValue = null) {
 }
 
 function startOfDay(dateValue) {
-  const parts = getZonedParts(dateValue);
-  if (!parts) return null;
-  return zonedDateTime(parts.year, parts.month, parts.day, 0, 0, 0, 0);
+  const dt = toVancouverDateTime(dateValue);
+  if (!dt || !dt.isValid) return null;
+  return dt.startOf('day').toJSDate();
 }
 
 function endOfDay(dateValue) {
-  const parts = getZonedParts(dateValue);
-  if (!parts) return null;
-  return zonedDateTime(parts.year, parts.month, parts.day, 23, 59, 59, 999);
+  const dt = toVancouverDateTime(dateValue);
+  if (!dt || !dt.isValid) return null;
+  return dt.endOf('day').toJSDate();
 }
 
 function buildPreparationTotals(subscriptions = []) {

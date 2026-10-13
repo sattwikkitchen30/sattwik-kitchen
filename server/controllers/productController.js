@@ -24,10 +24,15 @@ async function getOne(req, res) {
 async function create(req, res) {
   const { name, category, description, price, image, active, stock, lowStockThreshold } = req.body;
   if (!name || !(parseFloat(price) >= 0)) return res.status(400).json({ message: 'Name and a valid price are required' });
+  
+  // Validate description
+  const trimmedDescription = description ? String(description).trim() : '';
+  if (!trimmedDescription) return res.status(400).json({ message: 'Description is required' });
+  
   const product = await Product.create({
     name: String(name).trim(),
     category: category || 'Pickles',
-    description: description || '',
+    description: trimmedDescription,
     price: Math.round(parseFloat(price) * 100) / 100,
     image: image || 'assets/product-placeholder.svg',
     active: active !== false,
@@ -42,7 +47,11 @@ async function update(req, res) {
   const { name, category, description, price, image, active, stock, lowStockThreshold } = req.body;
   if (name !== undefined) updates.name = String(name).trim();
   if (category !== undefined) updates.category = category;
-  if (description !== undefined) updates.description = description;
+  if (description !== undefined) {
+    const trimmedDescription = String(description).trim();
+    if (!trimmedDescription) return res.status(400).json({ message: 'Description is required' });
+    updates.description = trimmedDescription;
+  }
   if (price !== undefined) updates.price = Math.round(parseFloat(price) * 100) / 100;
   if (image !== undefined) updates.image = image;
   if (active !== undefined) updates.active = Boolean(active);

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { buildDefaultTiffinItems } = require('./tiffinItems');
-const { buildPreparationTotals, buildActivePlanCounts } = require('./tiffinPreparation');
+const { buildPreparationTotals, buildActivePlanCounts, getSubscriptionServiceDates, formatDateKey } = require('./tiffinPreparation');
 
 function itemQuantity(items, preparationType) {
   return items.find((item) => item.preparationType === preparationType)?.quantity || 0;
@@ -88,4 +88,99 @@ test('refresh-style recalculation is deterministic and does not accumulate total
 
   assert.deepEqual(buildPreparationTotals(subscriptions), buildPreparationTotals(subscriptions));
   assert.equal(buildPreparationTotals(subscriptions).smallCurd, 2);
+});
+
+test('subscription service date calculation: start Sunday 2026-10-11 ends Friday 2026-11-06', () => {
+  const result = getSubscriptionServiceDates('2026-10-11');
+  assert.equal(formatDateKey(result.startDate), '2026-10-11');
+  assert.equal(formatDateKey(result.endDate), '2026-11-06');
+  assert.equal(result.serviceDates.length, 20);
+  
+  // Verify no weekends are included
+  const weekdays = result.serviceDates.map((d) => new Date(d).getDay());
+  assert.ok(!weekdays.includes(0), 'No Sundays');
+  assert.ok(!weekdays.includes(6), 'No Saturdays');
+  
+  // Verify first service day is Monday (12 Oct)
+  assert.equal(formatDateKey(result.serviceDates[0]), '2026-10-12');
+  
+  // Verify last service day is Friday (6 Nov)
+  assert.equal(formatDateKey(result.serviceDates[19]), '2026-11-06');
+});
+
+test('subscription service date calculation: start Monday 2026-10-12 ends Friday 2026-11-06', () => {
+  const result = getSubscriptionServiceDates('2026-10-12');
+  assert.equal(formatDateKey(result.startDate), '2026-10-12');
+  assert.equal(formatDateKey(result.endDate), '2026-11-06');
+  assert.equal(result.serviceDates.length, 20);
+  
+  // Verify first service day is the start date (Monday)
+  assert.equal(formatDateKey(result.serviceDates[0]), '2026-10-12');
+  
+  // Verify last service day is Friday
+  assert.equal(formatDateKey(result.serviceDates[19]), '2026-11-06');
+});
+
+test('subscription service date calculation: start Friday 2026-10-09 ends Thursday 2026-11-05', () => {
+  const result = getSubscriptionServiceDates('2026-10-09');
+  assert.equal(formatDateKey(result.startDate), '2026-10-09');
+  assert.equal(formatDateKey(result.endDate), '2026-11-05');
+  assert.equal(result.serviceDates.length, 20);
+  
+  // Verify first service day is the start date (Friday)
+  assert.equal(formatDateKey(result.serviceDates[0]), '2026-10-09');
+  
+  // Verify last service day is Thursday
+  assert.equal(formatDateKey(result.serviceDates[19]), '2026-11-05');
+});
+
+test('subscription service date calculation: start Saturday 2026-10-10 ends Friday 2026-11-06', () => {
+  const result = getSubscriptionServiceDates('2026-10-10');
+  assert.equal(formatDateKey(result.startDate), '2026-10-10');
+  assert.equal(formatDateKey(result.endDate), '2026-11-06');
+  assert.equal(result.serviceDates.length, 20);
+  
+  // Verify first service day is Monday (next day after Saturday)
+  assert.equal(formatDateKey(result.serviceDates[0]), '2026-10-12');
+  
+  // Verify last service day is Friday
+  assert.equal(formatDateKey(result.serviceDates[19]), '2026-11-06');
+});
+
+test('subscription service date calculation: exactly 20 weekdays counted', () => {
+  const result = getSubscriptionServiceDates('2026-10-12');
+  assert.equal(result.serviceDates.length, 20);
+  
+  // Count weekdays
+  const weekdays = result.serviceDates.map((d) => new Date(d).getDay());
+  const weekdayCount = weekdays.filter((d) => d >= 1 && d <= 5).length;
+  assert.equal(weekdayCount, 20);
+});
+
+test('subscription service date calculation: no Saturday or Sunday counted', () => {
+  const result = getSubscriptionServiceDates('2026-10-12');
+  const weekdays = result.serviceDates.map((d) => new Date(d).getDay());
+  
+  // Check for Saturday (6) and Sunday (0)
+  assert.ok(!weekdays.includes(0), 'No Sundays included');
+  assert.ok(!weekdays.includes(6), 'No Saturdays included');
+});
+
+test('subscription service date calculation: DST transition handled correctly', () => {
+  // Test around spring forward (second Sunday in March 2026)
+  const result = getSubscriptionServiceDates('2026-03-09');
+  assert.equal(result.serviceDates.length, 20);
+  assert.ok(result.endDate);
+  
+  // Verify the dates are valid
+  result.serviceDates.forEach((date) => {
+    assert.ok(!isNaN(date.getTime()), `Invalid date: ${date}`);
+  });
+});
+
+test('subscription service date calculation: explicit end date preserved if matches calculated', () => {
+  const calculated = getSubscriptionServiceDates('2026-10-12');
+  const withExplicit = getSubscriptionServiceDates('2026-10-12', '2026-11-06');
+  
+  assert.equal(formatDateKey(calculated.endDate), formatDateKey(withExplicit.endDate));
 });

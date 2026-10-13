@@ -461,10 +461,15 @@ function createProductCard(product) {
   if (qty > 0) card.classList.add('selected');
 
   const isOutOfStock = (product.stock || 0) === 0;
-  const stockDisplay = isOutOfStock ? 'Out of stock' : `${product.stock} available`;
+  const stockDisplay = isOutOfStock ? 'Out of Stock' : 'In Stock';
   const stockClass = isOutOfStock ? 'out-of-stock' : 'in-stock';
 
   const isOrderable = !isOutOfStock;
+
+  // Display description if available, otherwise omit
+  const descriptionHtml = product.description && product.description.trim()
+    ? `<p class="product-description">${product.description.trim()}</p>`
+    : '';
 
   card.innerHTML = `
     <div class="product-image-shell">
@@ -472,6 +477,7 @@ function createProductCard(product) {
     </div>
     <div class="product-info">
       <h4>${product.name}</h4>
+      ${descriptionHtml}
       <strong>${money(product.price)}</strong>
       <small class="stock-status ${stockClass}">${stockDisplay}</small>
     </div>

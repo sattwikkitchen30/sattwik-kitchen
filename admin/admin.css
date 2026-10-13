@@ -886,6 +886,224 @@ th {
 .prep-items-table tbody tr:last-child td {
   border-bottom: none;
 }
+.member-details-modal {
+  width: min(94vw, 1100px);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 32px;
+}
+.member-details-content {
+  display: grid;
+  gap: 24px;
+}
+.member-info-section,
+.member-filter-section,
+.member-count-section,
+.member-history-section,
+.member-actions-section {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  background: var(--panel-soft);
+}
+.member-info-section h4,
+.member-filter-section h4,
+.member-count-section h4,
+.member-history-section h4 {
+  margin: 0 0 16px 0;
+  color: var(--brown);
+  font-size: 18px;
+  font-weight: 600;
+}
+.member-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+.member-info-grid > div {
+  display: flex;
+  flex-direction: column;
+}
+.member-info-grid strong {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.member-info-grid span {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+.filter-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 140px;
+}
+.filter-controls label span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.filter-controls select,
+.filter-controls input {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--panel);
+  color: var(--ink);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.filter-controls select:focus,
+.filter-controls input:focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(12, 122, 98, 0.1);
+}
+.filter-controls select:disabled,
+.filter-controls input:disabled {
+  background: var(--panel-soft);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.filtered-count-display {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--green);
+}
+.member-history-section table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.member-history-section th,
+.member-history-section td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.member-history-section th {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--panel);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.member-history-section td {
+  font-size: 14px;
+  color: var(--ink);
+}
+.member-history-section tbody tr:hover {
+  background: var(--panel-soft);
+}
+.pagination-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin-top: 20px;
+}
+.pagination-controls span {
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.member-actions-section {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.member-actions-section .btn {
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+.member-actions-section .btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+.member-actions-section .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@media (max-width: 768px) {
+  .member-details-modal {
+    width: 100%;
+    padding: 20px;
+  }
+  .member-info-grid {
+    grid-template-columns: 1fr;
+  }
+  .filter-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .filter-controls label {
+    min-width: 100%;
+  }
+  .member-actions-section {
+    flex-direction: column;
+  }
+  .member-actions-section .btn {
+    width: 100%;
+  }
+}
+.btn-danger {
+  background: var(--rose);
+  color: #fff;
+}
+.btn-danger:hover {
+  background: #b54a3d;
+}
+.table-action-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: .15s;
+}
+.table-action-btn:hover {
+  background: var(--border);
+}
+@media (max-width: 768px) {
+  .member-info-grid {
+    grid-template-columns: 1fr;
+  }
+  .filter-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .filter-controls label {
+    width: 100%;
+  }
+  .filter-controls select,
+  .filter-controls input {
+    width: 100%;
+  }
+  .member-actions-section {
+    flex-direction: column;
+  }
+  .member-actions-section button {
+    width: 100%;
+  }
+}
 .prep-empty-state {
   padding: 22px;
   border: 1px dashed var(--border);

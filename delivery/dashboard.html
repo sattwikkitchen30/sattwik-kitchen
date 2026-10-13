@@ -1,7 +1,84 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Delivery Dashboard | Sattwik Kitchen</title><link rel="stylesheet" href="delivery.css"></head>
-<body class="delivery-page"><main class="delivery-main"><header class="delivery-header"><div><p class="eyebrow">DELIVERY MEMBER</p><h1>My Assigned Orders</h1><p id="memberName"></p></div><div><button class="delivery-button secondary" id="changePasswordBtn">Change Password</button><button class="delivery-button secondary" id="deliveryLogout">Log out</button></div></header><p id="deliveryMessage" class="message"></p><section id="deliveryOrders" class="delivery-orders"></section></main>
+<body class="delivery-page"><main class="delivery-main"><header class="delivery-header"><div><p class="eyebrow">DELIVERY MEMBER</p><h1>My Dashboard</h1><p id="memberName"></p></div><div><button class="delivery-button secondary" id="changePasswordBtn">Change Password</button><button class="delivery-button secondary" id="deliveryLogout">Log out</button></div></header><p id="deliveryMessage" class="message"></p>
+
+<!-- Tab Navigation -->
+<div class="delivery-tabs">
+  <button class="delivery-tab active" data-tab="orders">My Assigned Orders</button>
+  <button class="delivery-tab" data-tab="performance">My Delivery Performance</button>
+</div>
+
+<!-- Orders Tab -->
+<section id="ordersTab" class="delivery-tab-content active">
+  <section id="deliveryOrders" class="delivery-orders"></section>
+</section>
+
+<!-- Performance Tab -->
+<section id="performanceTab" class="delivery-tab-content">
+  <div class="performance-section">
+    <h2>My Delivery Performance</h2>
+    
+    <div class="member-info-card">
+      <h3>Member Information</h3>
+      <div class="member-info-grid">
+        <div><strong>Name:</strong> <span id="perfMemberName"></span></div>
+        <div><strong>Email:</strong> <span id="perfMemberEmail"></span></div>
+        <div><strong>Phone:</strong> <span id="perfMemberPhone"></span></div>
+        <div><strong>Status:</strong> <span id="perfMemberStatus"></span></div>
+        <div><strong>Total Deliveries:</strong> <span id="perfTotalCount"></span></div>
+      </div>
+    </div>
+    
+    <div class="filter-section">
+      <h3>Filter Deliveries</h3>
+      <div class="filter-controls">
+        <label>
+          <span>Period</span>
+          <select id="perfPeriodFilter">
+            <option value="all">All Time</option>
+            <option value="month">This Month</option>
+            <option value="custom">Custom Range</option>
+          </select>
+        </label>
+        <label id="perfMonthFilterLabel" hidden>
+          <span>Month</span>
+          <input id="perfMonthFilter" type="month" />
+        </label>
+        <label id="perfCustomDateFilterLabel" hidden>
+          <span>From</span>
+          <input id="perfFromDate" type="date" />
+        </label>
+        <label id="perfCustomDateFilterLabel2" hidden>
+          <span>To</span>
+          <input id="perfToDate" type="date" />
+        </label>
+        <button id="perfApplyFilter" class="delivery-button" type="button">Apply Filter</button>
+        <button id="perfClearFilter" class="delivery-button secondary" type="button">Clear</button>
+      </div>
+      <p id="perfFilterMessage" class="message"></p>
+    </div>
+    
+    <div class="count-section">
+      <h3>Filtered Count</h3>
+      <div class="filtered-count-display">
+        <span id="perfFilteredCount">0</span> deliveries in selected period
+      </div>
+    </div>
+    
+    <div class="history-section">
+      <h3>Delivery History</h3>
+      <div id="perfHistoryTable" class="history-table-shell"></div>
+      <div id="perfHistoryPagination" class="pagination-controls" hidden>
+        <button id="perfHistoryPrev" class="delivery-button secondary" type="button" disabled>Previous</button>
+        <span id="perfHistoryPageInfo">Page 1</span>
+        <button id="perfHistoryNext" class="delivery-button secondary" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
 
 <!-- Change Password Modal -->
 <div id="changePasswordModal" class="modal" style="display:none;">

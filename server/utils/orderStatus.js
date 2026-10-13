@@ -1,6 +1,7 @@
 const { STATUS_TRANSITIONS } = require('./constants');
 const { getOrderServiceDates, getCurrentServiceDate, resolveDeliveryStatus } = require('./deliveryStatus');
 const { getSubscriptionServiceDates } = require('./tiffinPreparation');
+const { recordDeliveryHistory } = require('./deliveryHistory');
 
 const LEGACY_STATUS = {
   PENDING: 'PENDING',
@@ -162,6 +163,16 @@ async function transitionOrderStatus(Order, order, requestedStatus, options = {}
   const operation = Order.findOneAndUpdate(filter, update, optionsForUpdate);
   const updatedOrder = typeof operation.lean === 'function' ? await operation.lean() : await operation;
   if (!updatedOrder) return { error: { status: 409, message: 'Order status or assignment has changed. Refresh and try again.' } };
+  
+  // Record delivery history when a delivery is completed
+  if (requested === 'DELIVERED' && !transition.cancellation && transition.scope === 'delivery') {
+    const historyResult = await recordDeliveryHistory(updatedOrder, now);
+    if (historyResult.error) {
+      console.error('[orderStatus] Failed to record delivery history:', historyResult.error);
+      // Don't fail the status transition if history recording fails, but log it
+    }
+  }
+  
   return { order: updatedOrder, current: transition.current, scope: transition.scope, cancellation: transition.cancellation };
 }
 

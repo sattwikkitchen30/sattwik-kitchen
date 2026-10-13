@@ -1313,7 +1313,7 @@ async function renderDeliveryMembersTable() {
   table.innerHTML = `
     <table>
       <thead><tr>
-        <th>Name</th><th>Email</th><th>Phone</th><th>Active</th><th>Created</th>
+        <th>Name</th><th>Email</th><th>Phone</th><th>Active</th><th>Created</th><th>Actions</th>
       </tr></thead>
       <tbody>
         ${members.map((member) => `
@@ -1323,11 +1323,19 @@ async function renderDeliveryMembersTable() {
             <td>${escHtml(member.phone)}</td>
             <td>${member.active ? 'Yes' : 'No'}</td>
             <td>${dateLabel(member.createdAt)}</td>
+            <td>
+              <button class="table-action-btn view-details-btn" data-member-id="${member.id}">View Details</button>
+            </td>
           </tr>
-        `).join('') || '<tr><td colspan="5">No delivery members found</td></tr>'}
+        `).join('') || '<tr><td colspan="6">No delivery members found</td></tr>'}
       </tbody>
     </table>
   `;
+  
+  // Add click handlers for View Details buttons
+  table.querySelectorAll('.view-details-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openMemberDetailsModal(btn.dataset.memberId));
+  });
 }
 
 document.getElementById('addDeliveryMemberForm')?.addEventListener('submit', async (e) => {
@@ -1369,6 +1377,245 @@ document.getElementById('addDeliveryMemberForm')?.addEventListener('submit', asy
 });
 
 // -----------------------------------------------------------------------
+// Delivery member details modal logic
+// -----------------------------------------------------------------------
+
+let currentMemberId = null;
+let memberHistoryPage = 0;
+const memberHistoryPageSize = 50;
+
+async function openMemberDetailsModal(memberId) {
+  currentMemberId = memberId;
+  memberHistoryPage = 0;
+  
+  try {
+    const data = await api(`/delivery-members/${encodeURIComponent(memberId)}`);
+    const member = data.member;
+    
+    // Populate member info
+    document.getElementById('memberDetailName').textContent = member.name;
+    document.getElementById('memberDetailEmail').textContent = member.email;
+    document.getElementById('memberDetailPhone').textContent = member.phone;
+    document.getElementById('memberDetailStatus').textContent = member.active ? 'Active' : 'Inactive';
+    document.getElementById('memberDetailTotalCount').textContent = data.totalCount || 0;
+    
+    // Set current month as default for month filter
+    const now = new Date();
+    document.getElementById('memberMonthFilter').value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    
+    // Load initial history (all time)
+    await loadMemberHistory(memberId);
+    
+    // Show modal
+    document.getElementById('memberDetailsModal').hidden = false;
+    document.getElementById('memberDetailsModal').setAttribute('aria-hidden', 'false');
+  } catch (error) {
+    alert(error.message || 'Could not load member details');
+  }
+}
+
+function closeMemberDetailsModal() {
+  document.getElementById('memberDetailsModal').hidden = true;
+  document.getElementById('memberDetailsModal').setAttribute('aria-hidden', 'true');
+  currentMemberId = null;
+  memberHistoryPage = 0;
+  document.getElementById('memberFilterMessage').textContent = '';
+}
+
+async function loadMemberHistory(memberId, filters = {}) {
+  try {
+    const { period, month, fromDate, toDate } = filters;
+    const queryParams = {};
+    
+    if (period === 'month' && month) {
+      const [year, monthNum] = month.split('-');
+      queryParams.year = parseInt(year);
+      queryParams.month = parseInt(monthNum);
+    } else if (period === 'custom') {
+      if (fromDate) queryParams.fromDate = fromDate;
+      if (toDate) queryParams.toDate = toDate;
+    }
+    
+    queryParams.skip = memberHistoryPage * memberHistoryPageSize;
+    queryParams.limit = memberHistoryPageSize;
+    
+    const data = await api(`/delivery-members/${encodeURIComponent(memberId)}?${new URLSearchParams(queryParams)}`);
+    
+    // Update filtered count
+    document.getElementById('memberFilteredCount').textContent = data.periodCount || 0;
+    
+    // Render history table
+    renderMemberHistoryTable(data.history);
+    
+    // Update pagination
+    const historyTotal = data.historyTotal || 0;
+    const totalPages = Math.ceil(historyTotal / memberHistoryPageSize);
+    document.getElementById('memberHistoryPagination').hidden = totalPages <= 1;
+    document.getElementById('memberHistoryPageInfo').textContent = `Page ${memberHistoryPage + 1} of ${totalPages || 1}`;
+    document.getElementById('memberHistoryPrev').disabled = memberHistoryPage === 0;
+    document.getElementById('memberHistoryNext').disabled = memberHistoryPage >= totalPages - 1;
+    
+  } catch (error) {
+    console.error('Failed to load member history:', error);
+    document.getElementById('memberHistoryTable').innerHTML = '<p>Could not load delivery history</p>';
+  }
+}
+
+function renderMemberHistoryTable(history) {
+  const table = document.getElementById('memberHistoryTable');
+  
+  if (!history || history.length === 0) {
+    table.innerHTML = '<p>No deliveries found for the selected period.</p>';
+    return;
+  }
+  
+  table.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Delivery Date</th>
+        <th>Order ID</th>
+        <th>Customer</th>
+        <th>Contact</th>
+        <th>Item/Plan</th>
+        <th>Amount</th>
+      </tr></thead>
+      <tbody>
+        ${history.map((record) => {
+          const customer = record.customerSnapshot || {};
+          const delivery = record.deliverySnapshot || {};
+          const deliveryDate = new Date(record.deliveryDate);
+          const dateStr = deliveryDate.toLocaleDateString('en-US', { 
+            timeZone: 'America/Vancouver',
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+          });
+          
+          let itemDisplay = delivery.orderType || 'Product';
+          if (delivery.orderType === 'tiffin' && delivery.tiffinPlan) {
+            const size = delivery.tiffinPlan.size ? delivery.tiffinPlan.size.charAt(0).toUpperCase() + delivery.tiffinPlan.size.slice(1) : '';
+            const type = delivery.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal';
+            itemDisplay = `${type} (${size})`;
+          }
+          
+          return `
+            <tr>
+              <td>${dateStr}</td>
+              <td>${escHtml(record.orderId)}</td>
+              <td>${escHtml(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())}</td>
+              <td>${escHtml(customer.phone || '')}</td>
+              <td>${escHtml(itemDisplay)}</td>
+              <td>$${(record.orderAmount || 0).toFixed(2)}</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// Filter controls
+document.getElementById('memberPeriodFilter')?.addEventListener('change', (e) => {
+  const period = e.target.value;
+  const monthLabel = document.getElementById('monthFilterLabel');
+  const customLabel = document.getElementById('customDateFilterLabel');
+  const customLabel2 = document.getElementById('customDateFilterLabel2');
+  
+  monthLabel.hidden = period !== 'month';
+  customLabel.hidden = period !== 'custom';
+  customLabel2.hidden = period !== 'custom';
+  
+  if (period === 'all') {
+    loadMemberHistory(currentMemberId, { period: 'all' });
+  }
+});
+
+document.getElementById('memberApplyFilter')?.addEventListener('click', () => {
+  const period = document.getElementById('memberPeriodFilter').value;
+  const month = document.getElementById('memberMonthFilter').value;
+  const fromDate = document.getElementById('memberFromDate').value;
+  const toDate = document.getElementById('memberToDate').value;
+  const msgEl = document.getElementById('memberFilterMessage');
+  
+  msgEl.textContent = '';
+  
+  if (period === 'custom' && fromDate && toDate && new Date(fromDate) > new Date(toDate)) {
+    msgEl.textContent = 'From date must be before or equal to To date.';
+    return;
+  }
+  
+  loadMemberHistory(currentMemberId, { period, month, fromDate, toDate });
+});
+
+document.getElementById('memberClearFilter')?.addEventListener('click', () => {
+  document.getElementById('memberPeriodFilter').value = 'all';
+  document.getElementById('monthFilterLabel').hidden = true;
+  document.getElementById('customDateFilterLabel').hidden = true;
+  document.getElementById('customDateFilterLabel2').hidden = true;
+  document.getElementById('memberFromDate').value = '';
+  document.getElementById('memberToDate').value = '';
+  document.getElementById('memberFilterMessage').textContent = '';
+  memberHistoryPage = 0;
+  loadMemberHistory(currentMemberId, { period: 'all' });
+});
+
+// Pagination
+document.getElementById('memberHistoryPrev')?.addEventListener('click', () => {
+  if (memberHistoryPage > 0) {
+    memberHistoryPage--;
+    loadMemberHistory(currentMemberId);
+  }
+});
+
+document.getElementById('memberHistoryNext')?.addEventListener('click', () => {
+  memberHistoryPage++;
+  loadMemberHistory(currentMemberId);
+});
+
+// Delete member
+document.getElementById('memberDeleteBtn')?.addEventListener('click', () => {
+  const memberName = document.getElementById('memberDetailName').textContent;
+  const message = document.getElementById('deleteMemberMessage');
+  
+  message.textContent = `Are you sure you want to delete ${memberName}? This action is permanent and will remove their account and all related delivery history. Their past deliveries will no longer appear in reports.`;
+  
+  document.getElementById('deleteMemberModal').hidden = false;
+  document.getElementById('deleteMemberModal').setAttribute('aria-hidden', 'false');
+});
+
+document.getElementById('cancelDeleteMemberBtn')?.addEventListener('click', () => {
+  document.getElementById('deleteMemberModal').hidden = true;
+  document.getElementById('deleteMemberModal').setAttribute('aria-hidden', 'true');
+});
+
+document.getElementById('deleteMemberCloseBtn')?.addEventListener('click', () => {
+  document.getElementById('deleteMemberModal').hidden = true;
+  document.getElementById('deleteMemberModal').setAttribute('aria-hidden', 'true');
+});
+
+document.getElementById('confirmDeleteMemberBtn')?.addEventListener('click', async () => {
+  if (!currentMemberId) return;
+  
+  try {
+    await api(`/delivery-members/${encodeURIComponent(currentMemberId)}`, { method: 'DELETE' });
+    alert('Delivery member deleted successfully');
+    closeMemberDetailsModal();
+    document.getElementById('deleteMemberModal').hidden = true;
+    document.getElementById('deleteMemberModal').setAttribute('aria-hidden', 'true');
+    await renderDeliveryMembersTable();
+  } catch (error) {
+    alert(error.message || 'Could not delete delivery member');
+  }
+});
+
+// Close modals
+document.getElementById('memberDetailsCloseBtn')?.addEventListener('click', closeMemberDetailsModal);
+document.getElementById('memberDetailsCloseBtn')?.addEventListener('click', closeMemberDetailsModal);
+document.getElementById('memberDetailsModal')?.addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeMemberDetailsModal();
+});
+
+// -----------------------------------------------------------------------
 // Product edit modal logic
 // -----------------------------------------------------------------------
 
@@ -1377,6 +1624,7 @@ function openEditModal(product) {
   document.getElementById('editName').value = product.name || '';
   document.getElementById('editPrice').value = product.price ?? '';
   document.getElementById('editStock').value = product.stock ?? 0;
+  document.getElementById('editDescription').value = product.description || '';
   document.getElementById('editImage').value =
     product.image === 'assets/product-placeholder.svg' ? '' : (product.image || '');
   document.getElementById('editActive').checked = product.active !== false;
@@ -1477,6 +1725,7 @@ document.getElementById('productEditForm')?.addEventListener('submit', async (e)
   const newCategoryInput = document.getElementById('editNewCategoryInput').value.trim();
   const price = parseFloat(document.getElementById('editPrice').value);
   const stock = parseInt(document.getElementById('editStock').value, 10);
+  const description = document.getElementById('editDescription').value.trim();
   const imageRaw = document.getElementById('editImage').value.trim();
   const image = imageRaw || 'assets/product-placeholder.svg';
   const active = document.getElementById('editActive').checked;
@@ -1493,6 +1742,7 @@ document.getElementById('productEditForm')?.addEventListener('submit', async (e)
   // Client-side validation
   if (!name) { msgEl.textContent = 'Product name is required.'; return; }
   if (!category) { msgEl.textContent = 'Category is required.'; return; }
+  if (!description) { msgEl.textContent = 'Description is required.'; return; }
   if (!Number.isFinite(price) || price < 0) { msgEl.textContent = 'Enter a valid non-negative price.'; return; }
   if (!Number.isInteger(stock) || stock < 0) { msgEl.textContent = 'Stock must be a non-negative whole number.'; return; }
 
@@ -1503,7 +1753,7 @@ document.getElementById('productEditForm')?.addEventListener('submit', async (e)
   try {
     await api(`/products/${id}`, {
       method: 'PUT',
-      body: JSON.stringify({ name, category, price, stock, image, active })
+      body: JSON.stringify({ name, category, price, stock, description, image, active })
     });
     setMessage(msgEl, 'Saved successfully!', true);
     // Refresh the products table so changes are immediately visible
@@ -1684,6 +1934,7 @@ document.getElementById('productAddForm')?.addEventListener('submit', async (e) 
   const newCategoryInput = document.getElementById('addNewCategoryInput').value.trim();
   const price = parseFloat(document.getElementById('addPrice').value);
   const stock = parseInt(document.getElementById('addStock').value, 10);
+  const description = document.getElementById('addDescription').value.trim();
   const imageRaw = document.getElementById('addImage').value.trim();
   const image = imageRaw || 'assets/product-placeholder.svg';
   const active = document.getElementById('addActive').checked;
@@ -1700,6 +1951,7 @@ document.getElementById('productAddForm')?.addEventListener('submit', async (e) 
   // Client-side validation
   if (!name) { msgEl.textContent = 'Product name is required.'; return; }
   if (!category) { msgEl.textContent = 'Category is required.'; return; }
+  if (!description) { msgEl.textContent = 'Description is required.'; return; }
   if (!Number.isFinite(price) || price < 0) { msgEl.textContent = 'Enter a valid non-negative price.'; return; }
   if (!Number.isInteger(stock) || stock < 0) { msgEl.textContent = 'Stock must be a non-negative whole number.'; return; }
 
@@ -1710,7 +1962,7 @@ document.getElementById('productAddForm')?.addEventListener('submit', async (e) 
   try {
     await api('/products', {
       method: 'POST',
-      body: JSON.stringify({ name, category, price, stock, image, active, lowStockThreshold: 5 })
+      body: JSON.stringify({ name, category, price, stock, description, image, active, lowStockThreshold: 5 })
     });
     setMessage(msgEl, 'Product added successfully!', true);
     // Refresh the products table so changes are immediately visible

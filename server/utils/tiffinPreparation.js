@@ -103,17 +103,29 @@ function getSubscriptionServiceDates(startDateValue, endDateValue = null) {
 
   const serviceDates = [];
   let cursor = start;
+  
+  // Count exactly 20 service days (Monday-Friday only)
   while (serviceDates.length < 20) {
     if (isServiceDay(cursor)) {
       serviceDates.push(startOfDay(cursor));
     }
     cursor = addDays(cursor, 1);
+    // Safety break to prevent infinite loops
     if (!cursor || cursor.getTime() - start.getTime() > 1000 * 60 * 60 * 24 * 365) {
       break;
     }
   }
 
-  const resolvedEnd = serviceDates[serviceDates.length - 1] || start;
+  // If we couldn't find 20 service days, return what we have
+  if (serviceDates.length === 0) {
+    return { startDate: start, endDate: start, serviceDates: [] };
+  }
+
+  // The end date is the last service day found
+  const resolvedEnd = serviceDates[serviceDates.length - 1];
+  
+  // If an explicit end date is provided and it matches the calculated end, use it
+  // Otherwise, use the calculated end date
   const explicitEnd = endDateValue ? startOfDay(endDateValue) : null;
   const normalizedEnd = explicitEnd && serviceDates.length === 20 && explicitEnd.getTime() === resolvedEnd.getTime()
     ? explicitEnd

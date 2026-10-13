@@ -247,6 +247,100 @@
         <div id="deliveryMembersTable" class="table-shell"></div>
       </div>
     </section>
+
+  <!-- =====================================================================
+       Delivery member details modal
+       ===================================================================== -->
+  <div id="memberDetailsModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="memberDetailsTitle" hidden>
+    <div class="modal-shell member-details-modal">
+      <div class="modal-header">
+        <h3 id="memberDetailsTitle">Delivery Member Details</h3>
+        <button type="button" class="modal-close" id="memberDetailsCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div class="member-details-content">
+        <div class="member-info-section">
+          <h4>Member Information</h4>
+          <div class="member-info-grid">
+            <div><strong>Name:</strong> <span id="memberDetailName"></span></div>
+            <div><strong>Email:</strong> <span id="memberDetailEmail"></span></div>
+            <div><strong>Phone:</strong> <span id="memberDetailPhone"></span></div>
+            <div><strong>Status:</strong> <span id="memberDetailStatus"></span></div>
+            <div><strong>Total Deliveries:</strong> <span id="memberDetailTotalCount"></span></div>
+          </div>
+        </div>
+        
+        <div class="member-filter-section">
+          <h4>Filter Deliveries</h4>
+          <div class="filter-controls">
+            <label>
+              <span>Period</span>
+              <select id="memberPeriodFilter">
+                <option value="all">All Time</option>
+                <option value="month">This Month</option>
+                <option value="custom">Custom Range</option>
+              </select>
+            </label>
+            <label id="monthFilterLabel" hidden>
+              <span>Month</span>
+              <input id="memberMonthFilter" type="month" />
+            </label>
+            <label id="customDateFilterLabel" hidden>
+              <span>From</span>
+              <input id="memberFromDate" type="date" />
+            </label>
+            <label id="customDateFilterLabel2" hidden>
+              <span>To</span>
+              <input id="memberToDate" type="date" />
+            </label>
+            <button id="memberApplyFilter" class="btn btn-secondary" type="button">Apply Filter</button>
+            <button id="memberClearFilter" class="btn btn-secondary" type="button">Clear</button>
+          </div>
+          <p id="memberFilterMessage" class="form-message" aria-live="polite"></p>
+        </div>
+        
+        <div class="member-count-section">
+          <h4>Filtered Count</h4>
+          <div class="filtered-count-display">
+            <span id="memberFilteredCount">0</span> deliveries in selected period
+          </div>
+        </div>
+        
+        <div class="member-history-section">
+          <h4>Delivery History</h4>
+          <div id="memberHistoryTable" class="table-shell"></div>
+          <div id="memberHistoryPagination" class="pagination-controls" hidden>
+            <button id="memberHistoryPrev" class="btn btn-secondary" type="button" disabled>Previous</button>
+            <span id="memberHistoryPageInfo">Page 1</span>
+            <button id="memberHistoryNext" class="btn btn-secondary" type="button">Next</button>
+          </div>
+        </div>
+        
+        <div class="member-actions-section">
+          <button id="memberDeleteBtn" class="btn btn-danger" type="button">Delete Member</button>
+          <button id="memberDetailsCloseBtn" class="btn btn-secondary" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Delete confirmation modal
+       ===================================================================== -->
+  <div id="deleteMemberModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="deleteMemberTitle" hidden>
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h3 id="deleteMemberTitle">Delete Delivery Member</h3>
+        <button type="button" class="modal-close" id="deleteMemberCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="deleteMemberMessage"></p>
+        <div class="modal-actions">
+          <button id="confirmDeleteMemberBtn" class="btn btn-danger" type="button">Delete</button>
+          <button id="cancelDeleteMemberBtn" class="btn btn-secondary" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
  
     <section id="securityView" class="view-panel">
       <div class="panel card">
@@ -303,6 +397,10 @@
           <input id="editStock" type="number" required min="0" step="1" placeholder="e.g. 20" />
         </label>
         <label>
+          Description
+          <textarea id="editDescription" required rows="3" placeholder="Describe the product (ingredients, taste, serving suggestions, etc.)"></textarea>
+        </label>
+        <label>
           Image URL
           <input id="editImage" type="text" autocomplete="off" placeholder="https://… or leave blank for placeholder" />
         </label>
@@ -349,6 +447,10 @@
         <label>
           Stock (units)
           <input id="addStock" type="number" required min="0" step="1" placeholder="e.g. 20" />
+        </label>
+        <label>
+          Description
+          <textarea id="addDescription" required rows="3" placeholder="Describe the product (ingredients, taste, serving suggestions, etc.)"></textarea>
         </label>
         <label>
           Image URL

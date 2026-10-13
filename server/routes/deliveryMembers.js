@@ -1,7 +1,10 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const DeliveryMember = require('../models/DeliveryMember');
+const Order = require('../models/Order');
 const { authRequired } = require('../middleware/auth');
+const { deliveryAuthRequired } = require('../middleware/deliveryAuth');
+const { getMemberDeliveryHistory, getMemberDeliveryCount, deleteMemberDeliveryHistory } = require('../utils/deliveryHistory');
 
 const MIN_PASSWORD_LENGTH = 8;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -36,6 +39,79 @@ router.get('/', authRequired, async (req, res) => {
   } catch (err) {
     console.error('[deliveryMembers] list failed:', err.message);
     res.status(500).json({ message: 'Could not load delivery members' });
+  }
+});
+
+// Get current delivery member's own details and history (delivery member only)
+router.get('/me', deliveryAuthRequired, async (req, res) => {
+  try {
+    const member = req.deliveryMember;
+    if (!member) return res.status(404).json({ message: 'Delivery member not found' });
+    
+    // Convert ObjectId to string to match admin endpoint behavior
+    const memberId = String(member._id);
+    
+    // Get total delivery count (all time)
+    const totalCount = await getMemberDeliveryCount(memberId);
+    
+    // Get count for selected period
+    const { year, month, fromDate, toDate } = req.query;
+    const periodCount = await getMemberDeliveryCount(memberId, { year, month, fromDate, toDate });
+    
+    // Get history for selected period
+    const { history, total } = await getMemberDeliveryHistory(memberId, {
+      year,
+      month,
+      fromDate,
+      toDate,
+      limit: 50
+    });
+    
+    res.json({
+      member: publicMember(member),
+      totalCount,
+      periodCount,
+      history,
+      historyTotal: total
+    });
+  } catch (err) {
+    console.error('[deliveryMembers] me failed:', err.message);
+    res.status(500).json({ message: 'Could not load delivery member details' });
+  }
+});
+
+// Get delivery member details with history (admin only)
+router.get('/:id', authRequired, async (req, res) => {
+  try {
+    const member = await DeliveryMember.findById(req.params.id).select('name email phone active createdAt').lean();
+    if (!member) return res.status(404).json({ message: 'Delivery member not found' });
+    
+    // Get total delivery count (all time)
+    const totalCount = await getMemberDeliveryCount(req.params.id);
+    
+    // Get count for selected period
+    const { year, month, fromDate, toDate } = req.query;
+    const periodCount = await getMemberDeliveryCount(req.params.id, { year, month, fromDate, toDate });
+    
+    // Get history for selected period
+    const { history, total } = await getMemberDeliveryHistory(req.params.id, {
+      year,
+      month,
+      fromDate,
+      toDate,
+      limit: 50
+    });
+    
+    res.json({
+      member: publicMember(member),
+      totalCount,
+      periodCount,
+      history,
+      historyTotal: total
+    });
+  } catch (err) {
+    console.error('[deliveryMembers] details failed:', err.message);
+    res.status(500).json({ message: 'Could not load delivery member details' });
   }
 });
 
@@ -102,12 +178,33 @@ router.put('/:id', authRequired, async (req, res) => {
   }
 });
 
-// Delete delivery member (admin only)
+// Delete delivery member and all related records (admin only)
 router.delete('/:id', authRequired, async (req, res) => {
   try {
-    const member = await DeliveryMember.findByIdAndDelete(req.params.id);
+    const member = await DeliveryMember.findById(req.params.id);
     if (!member) return res.status(404).json({ message: 'Delivery member not found' });
-    res.json({ message: 'Delivery member deleted successfully' });
+    
+    // Delete delivery history for this member
+    const historyResult = await deleteMemberDeliveryHistory(req.params.id);
+    if (historyResult.error) {
+      console.error('[deliveryMembers] failed to delete delivery history:', historyResult.error);
+      return res.status(500).json({ message: 'Could not delete delivery history' });
+    }
+    
+    // Clear delivery member assignment from orders
+    const orderUpdateResult = await Order.updateMany(
+      { deliveryMemberId: req.params.id },
+      { $unset: { deliveryMemberId: 1 } }
+    );
+    
+    // Delete the member
+    await DeliveryMember.findByIdAndDelete(req.params.id);
+    
+    res.json({ 
+      message: 'Delivery member deleted successfully',
+      deletedHistoryCount: historyResult.deletedCount,
+      updatedOrdersCount: orderUpdateResult.modifiedCount
+    });
   } catch (err) {
     console.error('[deliveryMembers] delete failed:', err.message);
     res.status(500).json({ message: 'Could not delete the delivery member' });

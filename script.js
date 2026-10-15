@@ -543,6 +543,13 @@ function createProductCard(product) {
   card.dataset.category = product.category;
   card.dataset.stock = String(product.stock || 0);
 
+  const categorySlug = String(product.category || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  if (categorySlug) card.classList.add(`category-${categorySlug}`);
+
   const qty = cart.get(product.name)?.qty || 0;
   if (qty > 0) card.classList.add('selected');
 
@@ -556,7 +563,7 @@ function createProductCard(product) {
   const descriptionHtml = renderProductDescriptionHtml(product.description);
 
   card.innerHTML = `
-    <div class="product-image-shell">
+    <div class="product-image-shell product-image-container">
       <img src="${product.image || 'assets/product-placeholder.svg'}" alt="${escapeProductHtml(product.name)}" />
     </div>
     <div class="product-info">

@@ -107,6 +107,15 @@ a { color: inherit; text-decoration: none; }
 }
 .sidebar {
   width: 260px;
+  min-width: 260px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  z-index: 100;
   background: #22140d;
   color: white;
   padding: 22px 18px 18px;
@@ -161,6 +170,7 @@ a { color: inherit; text-decoration: none; }
 }
 .dashboard-main {
   flex: 1;
+  min-width: 0;
   padding: 26px;
 }
 .topbar {
@@ -256,6 +266,7 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--border);
   border-radius: 20px;
   box-shadow: var(--shadow);
+  min-width: 0;
 }
 .card {
   padding: 18px;
@@ -557,6 +568,7 @@ a { color: inherit; text-decoration: none; }
 }
 .table-shell {
   overflow: auto;
+  max-width: 100%;
 }
 table {
   width: 100%;
@@ -792,7 +804,13 @@ th {
 }
 @media (max-width: 860px) {
   .dashboard-body { display: block; }
-  .sidebar { width: 100%; }
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    position: static;
+    overflow-y: visible;
+  }
   .dashboard-main { padding: 18px; }
   .topbar { flex-direction: column; align-items: stretch; }
   .toolbar { justify-content: space-between; }

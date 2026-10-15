@@ -41,6 +41,7 @@ app.use('/api/customer-orders', wrapRouter(require('./routes/customerOrders')));
 app.use('/api/delivery-auth', wrapRouter(require('./routes/deliveryAuth')));
 app.use('/api/delivery-orders', wrapRouter(require('./routes/deliveryOrders')));
 app.use('/api/delivery-members', wrapRouter(require('./routes/deliveryMembers')));
+app.use('/api/delivery-plans', wrapRouter(require('./routes/deliveryPlans')));
 app.use('/api/products', wrapRouter(require('./routes/products')));
 app.use('/api/orders', wrapRouter(require('./routes/orders')));
 app.use('/api/customers', wrapRouter(require('./routes/customers')));

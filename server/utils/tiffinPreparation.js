@@ -1,6 +1,6 @@
 const { DateTime } = require('luxon');
 const { TIFFIN_MENU_BY_WEEKDAY } = require('./constants');
-const { buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('./tiffinItems');
+const { buildDefaultTiffinItems, getLegacyOrderTiffinItems, getTiffinPreparationType } = require('./tiffinItems');
 
 const BUSINESS_TIMEZONE = process.env.BUSINESS_TIMEZONE || 'America/Vancouver';
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -185,6 +185,7 @@ function buildPreparationTotals(subscriptions = []) {
     for (const item of tiffinItems) {
       const quantity = Number(item.quantity) || 0;
       if (quantity <= 0) continue;
+      const prepType = item.preparationType || getTiffinPreparationType(item.productName);
       const totalKey = {
         smallDal: 'smallDal',
         mediumDal: 'mediumDal',
@@ -196,7 +197,7 @@ function buildPreparationTotals(subscriptions = []) {
         bigCurd: 'bigCurd',
         riceBox: 'riceBoxes',
         chapathi: 'chapathiCount'
-      }[item.preparationType];
+      }[prepType];
       if (totalKey) {
         totals[totalKey] += quantity;
       } else if (item.productName) {

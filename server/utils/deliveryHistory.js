@@ -1,8 +1,33 @@
 const mongoose = require('mongoose');
 const DeliveryHistory = require('../models/DeliveryHistory');
 const Order = require('../models/Order');
+const Customer = require('../models/Customer');
 const { formatDateKey, startOfDay } = require('./tiffinPreparation');
 const BUSINESS_TIMEZONE = process.env.BUSINESS_TIMEZONE || 'America/Vancouver';
+
+/**
+ * Merges customer snapshot with latest customer profile
+ * Only fills missing fields; preserves existing valid snapshot values
+ * @param {Object} snapshot - The customer snapshot from history
+ * @param {Object} profile - The latest customer profile
+ * @returns {Object} Merged customer data
+ */
+function mergeCustomerSnapshot(snapshot, profile) {
+  if (!snapshot) snapshot = {};
+  if (!profile) return snapshot;
+  
+  const merged = { ...snapshot };
+  
+  // Only fill missing or empty fields from profile
+  if (!merged.firstName && profile.firstName) merged.firstName = profile.firstName;
+  if (!merged.lastName && profile.lastName) merged.lastName = profile.lastName;
+  if (!merged.phone && profile.phone) merged.phone = profile.phone;
+  if (!merged.email && profile.email) merged.email = profile.email;
+  if (!merged.address && profile.address) merged.address = profile.address;
+  if (!merged.area && profile.area) merged.area = profile.area;
+  
+  return merged;
+}
 
 /**
  * Records a delivery history entry when a delivery is completed
@@ -139,7 +164,7 @@ async function getMemberDeliveryHistory(deliveryMemberId, options = {}) {
   try {
     const [history, total] = await Promise.all([
       DeliveryHistory.find(match)
-        .populate('order', 'orderId totalAmount type fulfillment tiffinPlan')
+        .populate('order', 'orderId totalAmount type fulfillment tiffinPlan customer')
         .sort({ deliveryDate: -1, deliveredAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -147,7 +172,33 @@ async function getMemberDeliveryHistory(deliveryMemberId, options = {}) {
       DeliveryHistory.countDocuments(match)
     ]);
     
-    return { history, total };
+    // Fetch customer profiles for orders with customer references
+    const customerIds = history
+      .map(h => h.order?.customer)
+      .filter(id => id);
+    
+    let customersMap = {};
+    if (customerIds.length > 0) {
+      const customers = await Customer.find({ _id: { $in: customerIds } }).lean();
+      customersMap = customers.reduce((map, c) => {
+        map[String(c._id)] = c;
+        return map;
+      }, {});
+    }
+    
+    // Merge customer snapshots with latest profiles for missing fields
+    const enrichedHistory = history.map(h => {
+      if (!h.order) return h;
+      
+      const customer = customersMap[String(h.order.customer)];
+      if (customer) {
+        h.customerSnapshot = mergeCustomerSnapshot(h.customerSnapshot, customer);
+      }
+      
+      return h;
+    });
+    
+    return { history: enrichedHistory, total };
   } catch (error) {
     console.error('[deliveryHistory] query failed:', error.message);
     return { error: error.message, history: [], total: 0 };

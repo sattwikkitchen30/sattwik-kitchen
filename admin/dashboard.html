@@ -138,8 +138,31 @@
 
     <section id="productsView" class="view-panel">
       <div class="panel card">
-        <div class="panel-head"><h3>Products</h3><button id="newProductBtn" class="btn btn-secondary">Add product</button></div>
-        <div id="productsTable" class="table-shell large"></div>
+        <div class="panel-head">
+          <h3>Products</h3>
+          <div class="product-type-selector">
+            <button class="product-type-btn active" data-product-type="pickup">Pickup</button>
+            <button class="product-type-btn" data-product-type="delivery">Delivery</button>
+          </div>
+        </div>
+        
+        <!-- Pickup Products Section -->
+        <div id="pickupProductsSection" class="product-section active">
+          <div class="section-header">
+            <h4>Pickup Products</h4>
+            <button id="newPickupProductBtn" class="btn btn-secondary">Add Pickup Product</button>
+          </div>
+          <div id="productsTable" class="table-shell large"></div>
+        </div>
+        
+        <!-- Delivery Products Section -->
+        <div id="deliveryProductsSection" class="product-section">
+          <div class="section-header">
+            <h4>Delivery Plans</h4>
+            <button id="newDeliveryPlanBtn" class="btn btn-primary">Add Delivery Plan</button>
+          </div>
+          <div id="deliveryPlansContent"></div>
+        </div>
       </div>
     </section>
 
@@ -469,6 +492,95 @@
     </div>
   </div>
 
+  <!-- =====================================================================
+       Delivery Plan add modal — shown by JS when the admin clicks "Add Delivery Plan"
+       ===================================================================== -->
+  <div id="deliveryPlanAddModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="deliveryPlanAddModalTitle" hidden>
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h3 id="deliveryPlanAddModalTitle">Add Delivery Plan</h3>
+        <button type="button" class="modal-close" id="deliveryPlanAddModalCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <form id="deliveryPlanAddForm" class="stacked-form" novalidate>
+        <label>
+          Category
+          <select id="deliveryPlanCategory" required>
+            <option value="">Select or create category</option>
+            <option value="Full Meal">Full Meal</option>
+            <option value="Curry-Only">Curry-Only</option>
+            <option value="__new__">+ Create New Category</option>
+          </select>
+        </label>
+        <label id="newCategoryLabel" style="display:none">
+          New Category Name
+          <input id="deliveryPlanNewCategory" type="text" autocomplete="off" placeholder="e.g. Breakfast" />
+        </label>
+        <label id="categoryDescriptionLabel" style="display:none">
+          Category Description (optional)
+          <input id="deliveryPlanCategoryDescription" type="text" autocomplete="off" placeholder="Brief description" />
+        </label>
+        <label>
+          Size
+          <select id="deliveryPlanSize" required>
+            <option value="">Select size</option>
+            <option value="single">Single</option>
+            <option value="couple">Couple</option>
+            <option value="family">Family</option>
+            <option value="__new__">+ Add Size</option>
+          </select>
+        </label>
+        <label id="newSizeLabel" style="display:none">
+          Custom Size Name
+          <input id="deliveryPlanNewSize" type="text" autocomplete="off" placeholder="e.g. Small, Medium, Large" />
+        </label>
+        <label>
+          Display Name
+          <input id="deliveryPlanDisplayName" type="text" required autocomplete="off" placeholder="e.g. Full Meal (Single)" />
+        </label>
+        <label>
+          Description (optional)
+          <textarea id="deliveryPlanDescription" rows="2" autocomplete="off" placeholder="Plan description"></textarea>
+        </label>
+        <label>
+          Price ($)
+          <input id="deliveryPlanPrice" type="number" min="0" step="0.01" required autocomplete="off" placeholder="0.00" />
+        </label>
+        
+        <h4 style="margin: 16px 0 12px 0; font-size: 14px; color: var(--brown);">Product Items</h4>
+        
+        <div id="deliveryPlanItemsContainer">
+          <!-- Dynamic items will be added here -->
+        </div>
+        
+        <button type="button" class="btn btn-secondary" id="deliveryPlanAddItemBtn" style="margin-top: 12px; font-size: 13px;">+ Add Item</button>
+        
+        <div style="display:flex;gap:10px;margin-top:16px">
+          <button type="submit" class="btn btn-primary" id="deliveryPlanAddSaveBtn">Add Delivery Plan</button>
+          <button type="button" class="btn btn-secondary" id="deliveryPlanAddCancelBtn">Cancel</button>
+        </div>
+        <p id="deliveryPlanAddFormMessage" class="form-message" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+
+  <div id="deletePlanConfirmModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="deletePlanConfirmTitle" hidden>
+    <div class="modal-shell" style="max-width: 400px;">
+      <div class="modal-header">
+        <h3 id="deletePlanConfirmTitle">Delete Delivery Plan?</h3>
+        <button type="button" class="modal-close" id="deletePlanCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to delete <strong id="deletePlanName"></strong>?</p>
+        <p style="color: #83756d; font-size: 14px; margin-top: 8px;">This action may affect existing orders or subscriptions. Please confirm before continuing.</p>
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+          <button type="button" class="btn btn-secondary" id="deletePlanCancelBtn">Cancel</button>
+          <button type="button" class="btn btn-danger" id="deletePlanConfirmBtn">Delete Plan</button>
+        </div>
+        <p id="deletePlanMessage" class="form-message" aria-live="polite"></p>
+      </div>
+    </div>
+  </div>
+
   <div id="manualOrderModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="manualOrderTitle" hidden>
     <div class="modal-shell">
       <div class="modal-header">
@@ -504,20 +616,17 @@
       <div id="tiffinItemsOrderSummary" class="tiffin-items-order-summary"></div>
       <h4 class="tiffin-items-section-title">Items</h4>
       <div id="tiffinItemsList" class="tiffin-items-list"></div>
-      <button type="button" id="tiffinAddItemToggle" class="btn btn-secondary tiffin-add-item-toggle">Add Item</button>
-      <form id="tiffinAddItemForm" class="tiffin-add-item-form" hidden>
-        <label>
-          Item
-          <select id="tiffinAddItemProduct" required>
-            <option value="">Select a catalog product</option>
-          </select>
-        </label>
-        <label>
-          Quantity
-          <input id="tiffinAddItemQuantity" type="number" min="1" step="1" value="1" required />
-        </label>
-        <button type="submit" class="btn btn-secondary">Add</button>
-      </form>
+      <h4 class="tiffin-items-section-title">Add Items</h4>
+      <div class="tiffin-add-items-table" role="table" aria-label="Additional delivery items">
+        <div class="tiffin-add-items-header" role="row">
+          <span role="columnheader">Select Item</span>
+          <span role="columnheader">Size</span>
+          <span role="columnheader">Quantity</span>
+          <span role="columnheader" class="visually-hidden">Actions</span>
+        </div>
+        <div id="tiffinAddItemRows"></div>
+      </div>
+      <button type="button" id="tiffinAddAnotherItemBtn" class="btn btn-secondary tiffin-add-item-toggle">Add Another Item</button>
       <p id="tiffinItemsMessage" class="form-message" role="status" aria-live="polite"></p>
       <div class="tiffin-items-actions">
         <button type="button" class="btn btn-primary" id="tiffinItemsSaveBtn">Save Changes</button>

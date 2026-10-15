@@ -17,7 +17,12 @@ const tiffinItemSchema = new mongoose.Schema({
   productName: { type: String, required: true },
   category: { type: String, default: 'Tiffin Preparation' },
   preparationType: { type: String, default: null },
-  quantity: { type: Number, required: true, min: 1 }
+  quantity: { type: Number, required: true, min: 1 },
+  isAdditional: { type: Boolean, default: false },
+  itemKey: { type: String, default: null },
+  size: { type: String, default: null },
+  originalQuantity: { type: Number, default: 0 },
+  additionalQuantity: { type: Number, default: 0 }
 }, { _id: false });
 
 const customerSnapshotSchema = new mongoose.Schema({

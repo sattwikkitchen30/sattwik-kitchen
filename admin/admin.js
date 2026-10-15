@@ -4,6 +4,9 @@ let state = { overview: null, orders: [], products: [], customers: [], custom: n
 let tiffinEditorOrder = null;
 let tiffinEditorItems = [];
 let tiffinEditorProducts = [];
+let tiffinEditorCatalog = [];
+let tiffinEditorAdditionalRows = [];
+let tiffinEditorRowSeq = 0;
 
 const loginForm = document.getElementById('loginForm');
 const loginMessage = document.getElementById('loginMessage');
@@ -694,7 +697,7 @@ async function renderOrdersTable() {
                 <td>${escHtml(order.orderId)}</td>
                 <td><strong>${escHtml(customerName)}</strong></td>
                 <td>${escHtml(customer.phone || '—')}<br>${escHtml(customer.email || '—')}<br><strong>Address:</strong> ${escHtml(order.deliveryAddress || customer.address || customer.area || '—')}</td>
-                <td>${itemDetails}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Edit Items</button></td>
+                <td>${itemDetails}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Add Items</button></td>
                 <td>${order.type}</td>
                 <td>
                   <div class="tiffin-end-date-cell">
@@ -909,10 +912,153 @@ function renderOrderAmountEditor(order) {
   `;
 }
 
+const TIFFIN_SIZE_ALIASES = {
+  small: 'small',
+  '8 oz': 'small',
+  '8oz': 'small',
+  medium: 'medium',
+  '12 oz': 'medium',
+  '12oz': 'medium',
+  large: 'large',
+  big: 'large',
+  '16 oz': 'large',
+  '16oz': 'large'
+};
+const TIFFIN_SIZE_LABELS = { small: 'Small', medium: 'Medium', large: 'Large' };
+const TIFFIN_ITEM_ORDER = ['dal', 'curry', 'chapati', 'rice', 'curd'];
+const TIFFIN_PREP_FROM_ITEM = {
+  dal: (size) => `${size}Dal`,
+  curry: (size) => `${size}Curry`,
+  curd: (size) => (size === 'large' ? 'bigCurd' : size === 'small' ? 'smallCurd' : null),
+  chapati: () => 'chapathi',
+  rice: () => 'riceBox'
+};
+const TIFFIN_PREP_TO_ROW = {
+  smallDal: { itemKey: 'dal', size: 'small' },
+  mediumDal: { itemKey: 'dal', size: 'medium' },
+  largeDal: { itemKey: 'dal', size: 'large' },
+  smallCurry: { itemKey: 'curry', size: 'small' },
+  mediumCurry: { itemKey: 'curry', size: 'medium' },
+  largeCurry: { itemKey: 'curry', size: 'large' },
+  smallCurd: { itemKey: 'curd', size: 'small' },
+  bigCurd: { itemKey: 'curd', size: 'large' },
+  chapathi: { itemKey: 'chapati', size: '' },
+  riceBox: { itemKey: 'rice', size: '' }
+};
+
+const CANONICAL_DELIVERY_ITEM_NAMES = {
+  dal: 'Dal',
+  curry: 'Curry',
+  chapati: 'Chapati',
+  rice: 'Rice',
+  curd: 'Curd'
+};
+
+function normalizeDeliveryItemKey(name) {
+  let value = String(name || '').trim().toLowerCase();
+  if (!value) return '';
+  value = value.replace(/^(small|medium|large|big)\s+/, '');
+  if (/\bchapath?i\b|\bchapatti\b/.test(value) || value === 'chapati') return 'chapati';
+  if (value === 'dal' || /\bdal\b/.test(value)) return 'dal';
+  if (value === 'curry' || /\bcurr(?:y|ies)\b/.test(value)) return 'curry';
+  if (value === 'curd' || /\bcurd\b/.test(value)) return 'curd';
+  if (value === 'rice' || /\brice\b/.test(value)) return 'rice';
+  return value;
+}
+
+function parseDeliverySizeToken(quantity) {
+  const value = String(quantity || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return TIFFIN_SIZE_ALIASES[value] || '';
+}
+
+function collectDeliveryPlanRows(plan) {
+  const items = plan?.items || {};
+  const rows = [];
+  const dynamicItems = Array.isArray(items.dynamicItems) ? items.dynamicItems : [];
+  for (const item of dynamicItems) {
+    const name = String(item?.name || '').trim();
+    if (!name) continue;
+    rows.push({ name, quantity: item.quantity });
+  }
+
+  if (items.dal) rows.push({ name: 'Dal', quantity: items.dal });
+  if (items.curry) rows.push({ name: 'Curry', quantity: items.curry });
+  const chapatiCount = items.chapati ?? items.chapathi;
+  if (Number(chapatiCount) > 0) rows.push({ name: 'Chapati', quantity: chapatiCount });
+  if (Number(items.rice) > 0) rows.push({ name: 'Rice', quantity: items.rice });
+  if (items.curd) rows.push({ name: 'Curd', quantity: items.curd });
+  return rows;
+}
+
+function extractDeliveryCatalogItems(plans = []) {
+  const byKey = new Map();
+  for (const plan of plans) {
+    for (const row of collectDeliveryPlanRows(plan)) {
+      const key = normalizeDeliveryItemKey(row.name);
+      if (!key) continue;
+      const size = parseDeliverySizeToken(row.quantity);
+      const displayName = CANONICAL_DELIVERY_ITEM_NAMES[key] || (row.name ? row.name[0].toUpperCase() + row.name.slice(1) : row.name);
+      const existing = byKey.get(key) || { key, name: displayName, sizes: [] };
+      if (!byKey.has(key)) byKey.set(key, existing);
+      if (size && !existing.sizes.includes(size)) existing.sizes.push(size);
+    }
+  }
+  const sizeOrder = ['small', 'medium', 'large'];
+  const catalog = [...byKey.values()].map((item) => {
+    const sizes = item.key === 'chapati' ? [] : item.sizes.slice().sort((a, b) => sizeOrder.indexOf(a) - sizeOrder.indexOf(b));
+    return { key: item.key, name: item.name, sizes, supportsSize: item.key !== 'chapati' && sizes.length > 0 };
+  });
+  catalog.sort((a, b) => {
+    const aIndex = TIFFIN_ITEM_ORDER.indexOf(a.key);
+    const bIndex = TIFFIN_ITEM_ORDER.indexOf(b.key);
+    if (aIndex !== -1 || bIndex !== -1) return (aIndex === -1 ? 99 : aIndex) - (bIndex === -1 ? 99 : bIndex);
+    return a.name.localeCompare(b.name);
+  });
+  return catalog;
+}
+
+function getCanonicalIdentity(item) {
+  if (!item) return '';
+  if (item.productId) return `product:${String(item.productId)}`;
+
+  if (item.preparationType && TIFFIN_PREP_TO_ROW[item.preparationType]) {
+    return item.preparationType;
+  }
+
+  const name = String(item.productName || '').toLowerCase();
+  const size = /\b(big|large)\b/.test(name)
+    ? 'large'
+    : /\b(medium|med)\b/.test(name)
+      ? 'medium'
+      : 'small';
+  if (/\b(dal)\b/.test(name)) return `${size}Dal`;
+  if (/\b(curry|curries)\b/.test(name)) return `${size}Curry`;
+  if (/\b(curd)\b/.test(name)) return size === 'large' ? 'bigCurd' : 'smallCurd';
+  if (/\b(chapathi|chapati|chapatti)\b/.test(name)) return 'chapathi';
+  if (/\b(rice)\b/.test(name)) return 'riceBox';
+
+  const rawKey = normalizeDeliveryItemKey(item.itemKey || item.productName);
+  const normalizedSize = parseDeliverySizeToken(item.size) || (item.size ? String(item.size).toLowerCase() : '');
+
+  const prepFactory = TIFFIN_PREP_FROM_ITEM[rawKey];
+  if (prepFactory) {
+    const resolvedType = normalizedSize ? prepFactory(normalizedSize) : prepFactory();
+    if (resolvedType && TIFFIN_PREP_TO_ROW[resolvedType]) {
+      return resolvedType;
+    }
+  }
+
+  return normalizedSize ? `${rawKey}:${normalizedSize}` : rawKey;
+}
+
+function createEmptyAddItemRow() {
+  return { id: ++tiffinEditorRowSeq, itemKey: '', customName: '', size: '', quantity: '1', isCustom: false };
+}
+
 async function openTiffinItemsEditor(orderId) {
-  const [orderResponse, productsResponse] = await Promise.all([
+  const [orderResponse, deliveryPlansResponse] = await Promise.all([
     api(`/orders/${orderId}`),
-    api('/products/all?active=true')
+    api('/delivery-plans')
   ]);
   const order = orderResponse.order;
   const isDeliveryTiffin = order?.type === 'tiffin'
@@ -921,8 +1067,20 @@ async function openTiffinItemsEditor(orderId) {
   if (!isDeliveryTiffin) throw new Error('Only delivery tiffin orders can edit preparation items.');
 
   tiffinEditorOrder = order;
-  tiffinEditorItems = (order.tiffinItems || []).map((item) => ({ ...item }));
-  tiffinEditorProducts = (productsResponse.products || []).filter((product) => product.active !== false);
+  tiffinEditorCatalog = extractDeliveryCatalogItems(deliveryPlansResponse.plans || []);
+  const savedItems = (order.tiffinItems || []).map((item) => ({ ...item }));
+  tiffinEditorItems = savedItems.map((item) => {
+    const originalQuantity = Number.isInteger(item.originalQuantity) ? item.originalQuantity : (!item.isAdditional ? (Number(item.quantity) || 1) : 0);
+    const additionalQuantity = Number.isInteger(item.additionalQuantity) ? item.additionalQuantity : (item.isAdditional ? (Number(item.quantity) || 1) : 0);
+    return {
+      ...item,
+      quantity: Number(item.quantity) || 1,
+      originalQuantity,
+      additionalQuantity,
+      isAdditional: Boolean(item.isAdditional || additionalQuantity > 0)
+    };
+  });
+  tiffinEditorAdditionalRows = [createEmptyAddItemRow()];
 
   const customer = order.customer || {};
   const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
@@ -939,32 +1097,12 @@ async function openTiffinItemsEditor(orderId) {
     <div><strong>Start Date:</strong> ${escHtml(order.subscriptionStartDate || '—')}</div>
     <div><strong>End Date:</strong> ${escHtml(order.subscriptionEndDate || '—')}</div>
   `;
-  document.getElementById('tiffinAddItemProduct').innerHTML = `
-    <option value="">Select a catalog product</option>
-    ${tiffinEditorProducts.map((product) => `<option value="${escHtml(product._id)}">${escHtml(product.name)} (${escHtml(product.category || 'General')})</option>`).join('')}
-  `;
-  document.getElementById('tiffinAddItemQuantity').value = '1';
-  document.getElementById('tiffinAddItemForm').hidden = true;
   document.getElementById('tiffinItemsMessage').textContent = '';
   renderTiffinEditorItems();
+  renderTiffinAddItemRows();
   const modal = document.getElementById('tiffinItemsModal');
   modal.hidden = false;
   modal.setAttribute('aria-hidden', 'false');
-}
-
-function getTiffinEditorPreparationType(productName) {
-  const name = String(productName || '').toLowerCase();
-  const size = /\b(big|large)\b/.test(name)
-    ? 'large'
-    : /\b(medium|med)\b/.test(name)
-      ? 'medium'
-      : 'small';
-  if (/\bdal\b/.test(name)) return `${size}Dal`;
-  if (/\bcurr(?:y|ies)\b/.test(name)) return `${size}Curry`;
-  if (/\bcurd\b/.test(name)) return size === 'large' ? 'bigCurd' : 'smallCurd';
-  if (/\bchapathi\b|\bchapati\b|\bchapatti\b/.test(name)) return 'chapathi';
-  if (/\brice\b/.test(name)) return 'riceBox';
-  return null;
 }
 
 function renderTiffinEditorItems() {
@@ -982,6 +1120,175 @@ function renderTiffinEditorItems() {
     : '<p class="muted">No preparation items in this order.</p>';
 }
 
+function catalogItemForRow(row) {
+  return tiffinEditorCatalog.find((item) => item.key === row.itemKey) || null;
+}
+
+function renderTiffinAddItemRows() {
+  const container = document.getElementById('tiffinAddItemRows');
+  if (!container) return;
+  container.innerHTML = tiffinEditorAdditionalRows.map((row) => {
+    const catalogItem = catalogItemForRow(row);
+    const sizeDisabled = !row.isCustom && !catalogItem?.supportsSize;
+    const selectedItemOptions = tiffinEditorCatalog.map((item) => (
+      `<option value="${escHtml(item.key)}" ${!row.isCustom && item.key === row.itemKey ? 'selected' : ''}>${escHtml(item.name)}</option>`
+    )).join('');
+
+    let sizeOptions = '<option value="">—</option>';
+    if (row.isCustom) {
+      sizeOptions = `
+        <option value="">— (No size)</option>
+        <option value="small" ${row.size === 'small' ? 'selected' : ''}>Small</option>
+        <option value="medium" ${row.size === 'medium' ? 'selected' : ''}>Medium</option>
+        <option value="large" ${row.size === 'large' ? 'selected' : ''}>Large</option>
+      `;
+    } else if (catalogItem?.supportsSize) {
+      const validSize = catalogItem.sizes.includes(row.size) ? row.size : '';
+      sizeOptions = `<option value="">Select size</option>${catalogItem.sizes.map((s) => (
+        `<option value="${s}" ${validSize === s ? 'selected' : ''}>${TIFFIN_SIZE_LABELS[s] || s}</option>`
+      )).join('')}`;
+    }
+
+    return `
+      <div class="tiffin-add-item-row" data-row-id="${row.id}" role="row">
+        <label class="tiffin-add-item-select-col">
+          <span class="visually-hidden">Select Item</span>
+          <select class="tiffin-add-item-select" data-row-id="${row.id}" aria-label="Select item">
+            <option value="">Select item</option>
+            ${selectedItemOptions}
+            <option value="__custom__" ${row.isCustom ? 'selected' : ''}>+ Add</option>
+          </select>
+          ${row.isCustom ? `
+            <input class="tiffin-add-item-custom-name" type="text" data-row-id="${row.id}" placeholder="Custom item name" value="${escHtml(row.customName || '')}" aria-label="Custom item name" style="margin-top:4px;" />
+          ` : ''}
+        </label>
+        <label>
+          <span class="visually-hidden">Size</span>
+          <select class="tiffin-add-item-size" data-row-id="${row.id}" aria-label="Size" ${sizeDisabled ? 'disabled' : ''}>
+            ${sizeOptions}
+          </select>
+        </label>
+        <label>
+          <span class="visually-hidden">Quantity</span>
+          <input class="tiffin-add-item-quantity" type="number" min="1" step="1" value="${escHtml(row.quantity)}" data-row-id="${row.id}" aria-label="Quantity" />
+        </label>
+        <div class="tiffin-add-item-actions">
+          <button type="button" class="btn btn-secondary btn-sm tiffin-add-item-add" data-row-id="${row.id}">Add</button>
+          <button type="button" class="tiffin-item-remove tiffin-add-item-remove" data-row-id="${row.id}">Remove</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function mergeAddItemRow(rowId) {
+  const row = tiffinEditorAdditionalRows.find((r) => r.id === rowId);
+  if (!row) return false;
+  const message = document.getElementById('tiffinItemsMessage');
+
+  let resolved = null;
+  const quantity = Number(row.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    message.textContent = 'Quantity must be a positive whole number.';
+    return false;
+  }
+
+  if (row.isCustom) {
+    const rawName = String(row.customName || '').trim();
+    if (!rawName || rawName === '+ Add' || rawName === '+Add' || rawName === '__custom__') {
+      message.textContent = 'Enter a valid custom item name.';
+      return false;
+    }
+    const size = parseDeliverySizeToken(row.size);
+    const sizeLabel = size ? (TIFFIN_SIZE_LABELS[size] || (size[0].toUpperCase() + size.slice(1))) : '';
+    const alreadyHasSize = sizeLabel && new RegExp(`^${sizeLabel}\\b`, 'i').test(rawName);
+    const productName = sizeLabel && !alreadyHasSize ? `${sizeLabel} ${rawName}` : rawName;
+    const key = normalizeDeliveryItemKey(rawName);
+    const prepFactory = TIFFIN_PREP_FROM_ITEM[key];
+    const prepType = prepFactory ? (size ? prepFactory(size) : prepFactory()) : null;
+
+    resolved = {
+      productId: null,
+      productName,
+      category: 'Tiffin Preparation',
+      preparationType: prepType || key,
+      itemKey: key,
+      size: size || null,
+      quantity,
+      isAdditional: true
+    };
+  } else {
+    if (!row.itemKey) {
+      message.textContent = 'Choose a delivery item from the Delivery catalog.';
+      return false;
+    }
+    const catalogItem = catalogItemForRow(row);
+    if (!catalogItem) {
+      message.textContent = 'Choose a delivery item from the Delivery catalog.';
+      return false;
+    }
+    const size = catalogItem.supportsSize ? row.size : '';
+    if (catalogItem.supportsSize && !catalogItem.sizes.includes(size)) {
+      message.textContent = `Choose a valid size for ${catalogItem.name}.`;
+      return false;
+    }
+    const prepFactory = TIFFIN_PREP_FROM_ITEM[catalogItem.key];
+    const preparationType = prepFactory
+      ? (catalogItem.supportsSize ? prepFactory(size) : prepFactory())
+      : catalogItem.key;
+    const component = preparationType && TIFFIN_PREP_TO_ROW[preparationType]
+      ? {
+          smallDal: 'Small Dal',
+          mediumDal: 'Medium Dal',
+          largeDal: 'Large Dal',
+          smallCurry: 'Small Curry',
+          mediumCurry: 'Medium Curry',
+          largeCurry: 'Large Curry',
+          smallCurd: 'Small Curd',
+          bigCurd: 'Big Curd',
+          chapathi: 'Chapathi',
+          riceBox: 'Rice Box'
+        }[preparationType]
+      : null;
+    const productName = component || (catalogItem.supportsSize && size ? `${TIFFIN_SIZE_LABELS[size] || size} ${catalogItem.name}` : catalogItem.name);
+
+    resolved = {
+      productId: null,
+      productName,
+      category: 'Tiffin Preparation',
+      preparationType: preparationType || undefined,
+      itemKey: catalogItem.key,
+      size: size || null,
+      quantity,
+      isAdditional: true
+    };
+  }
+
+  const identity = getCanonicalIdentity(resolved);
+  const existing = tiffinEditorItems.find((item) => getCanonicalIdentity(item) === identity);
+  if (existing) {
+    existing.quantity = Number(existing.quantity) + quantity;
+    existing.additionalQuantity = (Number(existing.additionalQuantity) || 0) + quantity;
+    existing.isAdditional = true;
+  } else {
+    tiffinEditorItems.push({
+      ...resolved,
+      originalQuantity: 0,
+      additionalQuantity: quantity
+    });
+  }
+
+  row.itemKey = '';
+  row.customName = '';
+  row.size = '';
+  row.quantity = '1';
+  row.isCustom = false;
+  message.textContent = '';
+  renderTiffinEditorItems();
+  renderTiffinAddItemRows();
+  return true;
+}
+
 function closeTiffinItemsEditor() {
   const modal = document.getElementById('tiffinItemsModal');
   if (!modal) return;
@@ -989,6 +1296,8 @@ function closeTiffinItemsEditor() {
   modal.setAttribute('aria-hidden', 'true');
   tiffinEditorOrder = null;
   tiffinEditorItems = [];
+  tiffinEditorCatalog = [];
+  tiffinEditorAdditionalRows = [];
 }
 
 document.getElementById('tiffinItemsCloseBtn')?.addEventListener('click', closeTiffinItemsEditor);
@@ -997,10 +1306,78 @@ document.getElementById('tiffinItemsModal')?.addEventListener('click', (event) =
   if (event.target === event.currentTarget) closeTiffinItemsEditor();
 });
 
-document.getElementById('tiffinAddItemToggle')?.addEventListener('click', () => {
-  const form = document.getElementById('tiffinAddItemForm');
-  form.hidden = !form.hidden;
-  if (!form.hidden) document.getElementById('tiffinAddItemProduct').focus();
+document.getElementById('tiffinAddAnotherItemBtn')?.addEventListener('click', () => {
+  tiffinEditorAdditionalRows.push(createEmptyAddItemRow());
+  renderTiffinAddItemRows();
+});
+
+document.getElementById('tiffinAddItemRows')?.addEventListener('click', (event) => {
+  const removeButton = event.target.closest('.tiffin-add-item-remove');
+  const addButton = event.target.closest('.tiffin-add-item-add');
+  if (removeButton) {
+    const rowId = Number(removeButton.dataset.rowId);
+    tiffinEditorAdditionalRows = tiffinEditorAdditionalRows.filter((row) => row.id !== rowId);
+    if (!tiffinEditorAdditionalRows.length) tiffinEditorAdditionalRows = [createEmptyAddItemRow()];
+    renderTiffinAddItemRows();
+    return;
+  }
+  if (addButton) {
+    const rowId = Number(addButton.dataset.rowId);
+    mergeAddItemRow(rowId);
+  }
+});
+
+document.getElementById('tiffinAddItemRows')?.addEventListener('change', (event) => {
+  const rowId = Number(event.target.dataset.rowId);
+  const row = tiffinEditorAdditionalRows.find((entry) => entry.id === rowId);
+  if (!row) return;
+  if (event.target.matches('.tiffin-add-item-select')) {
+    if (event.target.value === '__custom__') {
+      row.itemKey = '__custom__';
+      row.isCustom = true;
+      row.size = '';
+    } else {
+      row.itemKey = event.target.value;
+      row.isCustom = false;
+      row.customName = '';
+      const catalogItem = catalogItemForRow(row);
+      row.size = catalogItem?.supportsSize && catalogItem.sizes.includes(row.size) ? row.size : '';
+    }
+    renderTiffinAddItemRows();
+    return;
+  }
+  if (event.target.matches('.tiffin-add-item-size')) {
+    row.size = event.target.value;
+    return;
+  }
+  if (event.target.matches('.tiffin-add-item-quantity')) {
+    row.quantity = event.target.value;
+    const quantity = Number(event.target.value);
+    if (!Number.isSafeInteger(quantity) || quantity < 1) {
+      document.getElementById('tiffinItemsMessage').textContent = 'Quantity must be a positive whole number.';
+    } else {
+      document.getElementById('tiffinItemsMessage').textContent = '';
+    }
+  }
+});
+
+document.getElementById('tiffinAddItemRows')?.addEventListener('input', (event) => {
+  const rowId = Number(event.target.dataset.rowId);
+  const row = tiffinEditorAdditionalRows.find((entry) => entry.id === rowId);
+  if (!row) return;
+  if (event.target.matches('.tiffin-add-item-custom-name')) {
+    row.customName = event.target.value;
+    return;
+  }
+  if (event.target.matches('.tiffin-add-item-quantity')) {
+    row.quantity = event.target.value;
+    const quantity = Number(event.target.value);
+    if (!Number.isSafeInteger(quantity) || quantity < 1) {
+      document.getElementById('tiffinItemsMessage').textContent = 'Quantity must be a positive whole number.';
+    } else {
+      document.getElementById('tiffinItemsMessage').textContent = '';
+    }
+  }
 });
 
 document.getElementById('tiffinItemsList')?.addEventListener('click', (event) => {
@@ -1009,11 +1386,26 @@ document.getElementById('tiffinItemsList')?.addEventListener('click', (event) =>
   if (!stepButton && !removeButton) return;
   const index = Number((stepButton || removeButton).dataset.itemIndex);
   if (!Number.isInteger(index) || !tiffinEditorItems[index]) return;
+  const item = tiffinEditorItems[index];
   if (removeButton) {
-    tiffinEditorItems.splice(index, 1);
+    if (item.originalQuantity > 0 && item.additionalQuantity > 0) {
+      item.quantity = item.originalQuantity;
+      item.additionalQuantity = 0;
+      item.isAdditional = false;
+    } else {
+      tiffinEditorItems.splice(index, 1);
+    }
   } else {
-    const nextQuantity = Number(tiffinEditorItems[index].quantity) + Number(stepButton.dataset.step);
-    tiffinEditorItems[index].quantity = Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, nextQuantity));
+    const nextQuantity = Number(item.quantity) + Number(stepButton.dataset.step);
+    const validQty = Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, nextQuantity));
+    item.quantity = validQty;
+    if (item.originalQuantity > 0) {
+      item.additionalQuantity = Math.max(0, validQty - item.originalQuantity);
+      item.isAdditional = item.additionalQuantity > 0;
+    } else {
+      item.additionalQuantity = validQty;
+      item.isAdditional = true;
+    }
   }
   renderTiffinEditorItems();
 });
@@ -1028,71 +1420,62 @@ document.getElementById('tiffinItemsList')?.addEventListener('change', (event) =
     renderTiffinEditorItems();
     return;
   }
-  tiffinEditorItems[index].quantity = quantity;
-  document.getElementById('tiffinItemsMessage').textContent = '';
-});
-
-document.getElementById('tiffinAddItemForm')?.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const product = tiffinEditorProducts.find((item) => String(item._id) === document.getElementById('tiffinAddItemProduct').value);
-  const quantity = Number(document.getElementById('tiffinAddItemQuantity').value);
-  const message = document.getElementById('tiffinItemsMessage');
-  if (!product) {
-    message.textContent = 'Choose a catalog item to add.';
-    return;
-  }
-  if (!Number.isSafeInteger(quantity) || quantity < 1) {
-    message.textContent = 'Quantity must be a positive whole number.';
-    return;
-  }
-
-  const preparationType = getTiffinEditorPreparationType(product.name);
-  const existingItem = tiffinEditorItems.find((item) => (
-    String(item.productId || '') === String(product._id)
-    || (preparationType && item.preparationType === preparationType)
-  ));
-  if (existingItem) {
-    const combinedQuantity = Number(existingItem.quantity) + quantity;
-    if (!Number.isSafeInteger(combinedQuantity)) {
-      message.textContent = 'The combined item quantity is too large.';
-      return;
-    }
-    existingItem.quantity = combinedQuantity;
+  const item = tiffinEditorItems[index];
+  item.quantity = quantity;
+  if (item.originalQuantity > 0) {
+    item.additionalQuantity = Math.max(0, quantity - item.originalQuantity);
+    item.isAdditional = item.additionalQuantity > 0;
   } else {
-    if (tiffinEditorItems.length >= 50) {
-      message.textContent = 'An order can contain at most 50 preparation items.';
-      return;
-    }
-    tiffinEditorItems.push({
-      productId: product._id,
-      productName: product.name,
-      category: product.category,
-      preparationType,
-      quantity
-    });
+    item.additionalQuantity = quantity;
+    item.isAdditional = true;
   }
-  document.getElementById('tiffinAddItemProduct').value = '';
-  document.getElementById('tiffinAddItemQuantity').value = '1';
-  message.textContent = '';
-  renderTiffinEditorItems();
+  document.getElementById('tiffinItemsMessage').textContent = '';
 });
 
 document.getElementById('tiffinItemsSaveBtn')?.addEventListener('click', async (event) => {
   if (!tiffinEditorOrder) return;
   const button = event.currentTarget;
   const message = document.getElementById('tiffinItemsMessage');
+
+  for (const row of tiffinEditorAdditionalRows) {
+    const hasInput = row.isCustom ? row.customName.trim() : row.itemKey;
+    if (hasInput) {
+      const ok = mergeAddItemRow(row.id);
+      if (!ok) return;
+    }
+  }
+
+  for (const item of tiffinEditorItems) {
+    if (!Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1) {
+      message.textContent = 'Quantity must be a positive whole number.';
+      return;
+    }
+  }
+
+  if (tiffinEditorItems.length > 50) {
+    message.textContent = 'An order can contain at most 50 preparation items.';
+    return;
+  }
+
+  const items = tiffinEditorItems.map((item) => ({
+    productId: item.productId && /^[a-fA-F0-9]{24}$/.test(String(item.productId)) ? item.productId : null,
+    preparationType: item.preparationType || null,
+    productName: item.productName,
+    category: item.category || 'Tiffin Preparation',
+    itemKey: item.itemKey || null,
+    size: item.size || null,
+    quantity: Number(item.quantity),
+    originalQuantity: Number(item.originalQuantity) || 0,
+    additionalQuantity: Number(item.additionalQuantity) || 0,
+    isAdditional: Boolean(item.isAdditional || (item.additionalQuantity > 0))
+  }));
+
   button.disabled = true;
   message.textContent = '';
   try {
     await api(`/orders/${tiffinEditorOrder._id}/tiffin-items`, {
       method: 'PUT',
-      body: JSON.stringify({
-        items: tiffinEditorItems.map((item) => ({
-          productId: item.productId || null,
-          preparationType: item.preparationType || null,
-          quantity: Number(item.quantity)
-        }))
-      })
+      body: JSON.stringify({ items })
     });
     closeTiffinItemsEditor();
     showAdminToast('Order items updated successfully.');
@@ -1853,13 +2236,496 @@ async function exportData(kind) {
 // ===============================
 // PRODUCT ADD MODAL
 // ===============================
-if (document.getElementById('newProductBtn')) {
-  document.getElementById('newProductBtn').addEventListener('click', async () => {
+if (document.getElementById('newPickupProductBtn')) {
+  document.getElementById('newPickupProductBtn').addEventListener('click', async () => {
     await loadCategoriesForAddModal();
     document.getElementById('productAddModal').hidden = false;
     document.getElementById('productAddModal').setAttribute('aria-hidden', 'false');
   });
 }
+
+// ===============================
+// PRODUCT TYPE TAB SWITCHING
+// ===============================
+const productTypeBtns = document.querySelectorAll('.product-type-btn');
+productTypeBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const productType = btn.dataset.productType;
+
+    console.log('[Product Type] Switching to:', productType);
+
+    // Update active state
+    productTypeBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    // Switch sections
+    const pickupSection = document.getElementById('pickupProductsSection');
+    const deliverySection = document.getElementById('deliveryProductsSection');
+
+    console.log('[Product Type] Pickup section:', pickupSection);
+    console.log('[Product Type] Delivery section:', deliverySection);
+
+    if (productType === 'pickup') {
+      pickupSection.classList.add('active');
+      deliverySection.classList.remove('active');
+    } else if (productType === 'delivery') {
+      pickupSection.classList.remove('active');
+      deliverySection.classList.add('active');
+      console.log('[Product Type] Loading delivery plans...');
+      loadDeliveryPlans();
+    }
+  });
+});
+
+// ===============================
+// DELIVERY PLANS
+// ===============================
+async function loadDeliveryPlans() {
+  try {
+    console.log('[Delivery Plans] Loading plans...');
+    const data = await api('/delivery-plans');
+    console.log('[Delivery Plans] Received data:', data);
+    renderDeliveryPlans(data.plans);
+  } catch (error) {
+    console.error('[Delivery Plans] Failed to load delivery plans:', error);
+    document.getElementById('deliveryPlansContent').innerHTML = `<p class="error">Could not load delivery plans: ${error.message}</p>`;
+  }
+}
+
+function renderDeliveryPlans(plans) {
+  const container = document.getElementById('deliveryPlansContent');
+  if (!container) return;
+  
+  if (!plans || plans.length === 0) {
+    container.innerHTML = '<p>No delivery plans found. Click "Add Delivery Plan" to create one.</p>';
+    return;
+  }
+  
+  // Group by category
+  const categories = {};
+  plans.forEach(plan => {
+    if (!categories[plan.category]) {
+      categories[plan.category] = {
+        description: plan.categoryDescription,
+        plans: []
+      };
+    }
+    categories[plan.category].plans.push(plan);
+  });
+  
+  let html = '';
+  for (const [categoryName, categoryData] of Object.entries(categories)) {
+    html += `
+      <div class="delivery-category">
+        <h4>${categoryName}</h4>
+        ${categoryData.description ? `<p class="category-description">${categoryData.description}</p>` : ''}
+        <div class="delivery-plans-list">
+    `;
+    
+    categoryData.plans.forEach(plan => {
+      const statusClass = plan.active ? 'active' : 'inactive';
+      
+      // Handle both old fixed items and new dynamic items
+      let itemsHtml = '';
+      const sizeToOz = { small: '8 oz', medium: '12 oz', large: '16 oz' };
+      if (plan.items && plan.items.dynamicItems && plan.items.dynamicItems.length > 0) {
+        // New dynamic items structure
+        plan.items.dynamicItems.forEach(item => {
+          // Convert quantity names to ounces if they match size names
+          let quantity = item.quantity;
+          if (sizeToOz[quantity]) {
+            quantity = sizeToOz[quantity];
+          }
+          itemsHtml += `<small>${item.name}: ${quantity}</small>`;
+        });
+      } else if (plan.items) {
+        // Old fixed structure (backward compatibility)
+        if (plan.items.dal) itemsHtml += `<small>Dal: ${sizeToOz[plan.items.dal] || plan.items.dal}</small>`;
+        if (plan.items.curry) itemsHtml += `<small>Curry: ${sizeToOz[plan.items.curry] || plan.items.curry}</small>`;
+        if (plan.items.chapati > 0) itemsHtml += `<small>Chapathi: ${plan.items.chapati}</small>`;
+        if (plan.items.rice > 0) itemsHtml += `<small>Rice: ${plan.items.rice}</small>`;
+        if (plan.items.curd) itemsHtml += `<small>Curd: ${plan.items.curd}</small>`;
+      }
+      
+      html += `
+        <div class="delivery-plan-card ${statusClass}">
+          <div class="plan-header">
+            <strong>${plan.displayName}</strong>
+            <span class="plan-price">$${plan.price.toFixed(2)}</span>
+          </div>
+          <p class="plan-description">${plan.description || 'No description'}</p>
+          <div class="plan-items">
+            ${itemsHtml || '<small>No items specified</small>'}
+          </div>
+          <div class="plan-actions">
+            <button class="btn btn-sm btn-secondary" id="edit-btn-${plan._id}" onclick="editDeliveryPlan('${plan._id}', 'edit-btn-${plan._id}')">Edit</button>
+            <button class="btn btn-sm btn-danger" id="delete-btn-${plan._id}" onclick="confirmDeleteDeliveryPlan('${plan._id}', '${plan.displayName.replace(/'/g, "\\'")}', 'delete-btn-${plan._id}')">Delete</button>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += `
+        </div>
+      </div>
+    `;
+  }
+  
+  container.innerHTML = html;
+}
+
+// ===============================
+// DELIVERY PLAN ADD MODAL
+// ===============================
+document.getElementById('deliveryPlanAddModalCloseBtn')?.addEventListener('click', closeDeliveryPlanAddModal);
+document.getElementById('deliveryPlanAddCancelBtn')?.addEventListener('click', closeDeliveryPlanAddModal);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.getElementById('deliveryPlanAddModal').hidden) {
+    closeDeliveryPlanAddModal();
+  }
+});
+
+// Show/hide new category fields based on selection
+document.getElementById('deliveryPlanCategory')?.addEventListener('change', (e) => {
+  const isNewCategory = e.target.value === '__new__';
+  document.getElementById('newCategoryLabel').style.display = isNewCategory ? 'block' : 'none';
+  document.getElementById('categoryDescriptionLabel').style.display = isNewCategory ? 'block' : 'none';
+  
+  if (isNewCategory) {
+    document.getElementById('deliveryPlanNewCategory').required = true;
+  } else {
+    document.getElementById('deliveryPlanNewCategory').required = false;
+  }
+});
+
+// Show/hide new size field based on selection
+document.getElementById('deliveryPlanSize')?.addEventListener('change', (e) => {
+  const isNewSize = e.target.value === '__new__';
+  document.getElementById('newSizeLabel').style.display = isNewSize ? 'block' : 'none';
+  
+  if (isNewSize) {
+    document.getElementById('deliveryPlanNewSize').required = true;
+  } else {
+    document.getElementById('deliveryPlanNewSize').required = false;
+  }
+});
+
+// Dynamic items management
+let deliveryPlanItems = [];
+
+function addDeliveryPlanItemRow(item = { name: '', quantity: '' }) {
+  const container = document.getElementById('deliveryPlanItemsContainer');
+  const row = document.createElement('div');
+  row.className = 'delivery-plan-item-row';
+  row.style.display = 'flex';
+  row.style.gap = '8px';
+  row.style.marginBottom = '8px';
+  row.style.alignItems = 'center';
+  
+  row.innerHTML = `
+    <input type="text" class="delivery-plan-item-name" placeholder="Item name (e.g., Dal)" value="${item.name}" style="flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 6px;" required />
+    <input type="text" class="delivery-plan-item-quantity" placeholder="Quantity (e.g., 8 oz)" value="${item.quantity}" style="flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 6px;" required />
+    <button type="button" class="btn btn-secondary delivery-plan-item-remove" style="padding: 8px 12px; font-size: 12px;">Remove</button>
+  `;
+  
+  container.appendChild(row);
+  
+  // Add remove button handler
+  row.querySelector('.delivery-plan-item-remove').addEventListener('click', () => {
+    row.remove();
+  });
+}
+
+document.getElementById('deliveryPlanAddItemBtn')?.addEventListener('click', () => {
+  addDeliveryPlanItemRow();
+});
+
+// Add initial item row when modal opens
+if (document.getElementById('newDeliveryPlanBtn')) {
+  document.getElementById('newDeliveryPlanBtn').addEventListener('click', (e) => {
+    openDeliveryPlanModal(null, e.target.id);
+  });
+}
+
+// Edit delivery plan
+window.editDeliveryPlan = async function(planId, buttonId) {
+  try {
+    console.log('[Delivery Plans] Loading plan for edit:', planId);
+    const data = await api(`/delivery-plans/${planId}`);
+    openDeliveryPlanModal(data.plan, buttonId);
+  } catch (error) {
+    console.error('[Delivery Plans] Failed to load plan for edit:', error);
+    alert('Failed to load plan: ' + error.message);
+  }
+};
+
+// Confirm delete delivery plan
+window.confirmDeleteDeliveryPlan = function(planId, planName, buttonId) {
+  const modal = document.getElementById('deletePlanConfirmModal');
+  const planNameEl = document.getElementById('deletePlanName');
+  const deleteBtn = document.getElementById('deletePlanConfirmBtn');
+  
+  planNameEl.textContent = planName;
+  deleteBtn.dataset.planId = planId;
+  deleteBtn.dataset.buttonId = buttonId;
+  
+  modal.hidden = false;
+  modal.setAttribute('aria-hidden', 'false');
+  
+  // Store opener for focus restoration
+  modal.dataset.opener = buttonId;
+  
+  // Focus delete button
+  setTimeout(() => deleteBtn.focus(), 100);
+};
+
+function openDeliveryPlanModal(plan = null, openerId = null) {
+  const modal = document.getElementById('deliveryPlanAddModal');
+  const form = document.getElementById('deliveryPlanAddForm');
+  
+  // Store the opener ID for focus restoration
+  if (openerId) {
+    modal.dataset.opener = openerId;
+  }
+  
+  modal.hidden = false;
+  modal.setAttribute('aria-hidden', 'false');
+  
+  // Clear and reset form
+  form.reset();
+  document.getElementById('deliveryPlanItemsContainer').innerHTML = '';
+  document.getElementById('newCategoryLabel').style.display = 'none';
+  document.getElementById('categoryDescriptionLabel').style.display = 'none';
+  document.getElementById('newSizeLabel').style.display = 'none';
+  document.getElementById('deliveryPlanAddFormMessage').textContent = '';
+  document.getElementById('deliveryPlanAddFormMessage').className = 'form-message';
+  
+  // Move focus into the modal
+  setTimeout(() => {
+    document.getElementById('deliveryPlanCategory')?.focus();
+  }, 100);
+  
+  // Change save button text if editing
+  const saveBtn = document.getElementById('deliveryPlanAddSaveBtn');
+  if (plan) {
+    saveBtn.textContent = 'Update Delivery Plan';
+    saveBtn.dataset.mode = 'edit';
+    saveBtn.dataset.planId = plan._id;
+    
+    // Populate form with existing data
+    document.getElementById('deliveryPlanCategory').value = plan.category || '';
+    document.getElementById('deliveryPlanSize').value = plan.size || '';
+    document.getElementById('deliveryPlanDisplayName').value = plan.displayName || '';
+    document.getElementById('deliveryPlanDescription').value = plan.description || '';
+    document.getElementById('deliveryPlanPrice').value = plan.price || '';
+    
+    // Populate dynamic items
+    if (plan.items && plan.items.dynamicItems && plan.items.dynamicItems.length > 0) {
+      plan.items.dynamicItems.forEach(item => {
+        addDeliveryPlanItemRow(item);
+      });
+    } else {
+      // For old fixed structure, convert to dynamic items
+      if (plan.items) {
+        if (plan.items.dal) addDeliveryPlanItemRow({ name: 'Dal', quantity: plan.items.dal });
+        if (plan.items.curry) addDeliveryPlanItemRow({ name: 'Curry', quantity: plan.items.curry });
+        if (plan.items.chapati > 0) addDeliveryPlanItemRow({ name: 'Chapathi', quantity: plan.items.chapati });
+        if (plan.items.rice > 0) addDeliveryPlanItemRow({ name: 'Rice', quantity: plan.items.rice });
+        if (plan.items.curd) addDeliveryPlanItemRow({ name: 'Curd', quantity: plan.items.curd });
+      }
+    }
+  } else {
+    saveBtn.textContent = 'Add Delivery Plan';
+    saveBtn.dataset.mode = 'add';
+    delete saveBtn.dataset.planId;
+    
+    // Add initial empty item row
+    addDeliveryPlanItemRow();
+  }
+}
+
+// Handle form submission
+document.getElementById('deliveryPlanAddForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  
+  const saveBtn = document.getElementById('deliveryPlanAddSaveBtn');
+  const mode = saveBtn.dataset.mode || 'add';
+  const planId = saveBtn.dataset.planId;
+  
+  const categorySelect = document.getElementById('deliveryPlanCategory').value;
+  let category = categorySelect;
+  let categoryDescription = '';
+  
+  // If creating new category
+  if (categorySelect === '__new__') {
+    category = document.getElementById('deliveryPlanNewCategory').value.trim();
+    categoryDescription = document.getElementById('deliveryPlanCategoryDescription').value.trim();
+  }
+  
+  const sizeSelect = document.getElementById('deliveryPlanSize').value;
+  let size = sizeSelect;
+  
+  // If creating new size
+  if (sizeSelect === '__new__') {
+    size = document.getElementById('deliveryPlanNewSize').value.trim();
+  }
+  
+  const displayName = document.getElementById('deliveryPlanDisplayName').value.trim();
+  const description = document.getElementById('deliveryPlanDescription').value.trim();
+  const price = parseFloat(document.getElementById('deliveryPlanPrice').value);
+  
+  // Collect dynamic items
+  const itemRows = document.querySelectorAll('.delivery-plan-item-row');
+  const dynamicItems = [];
+  
+  for (const row of itemRows) {
+    const name = row.querySelector('.delivery-plan-item-name').value.trim();
+    const quantity = row.querySelector('.delivery-plan-item-quantity').value.trim();
+    
+    if (name && quantity) {
+      dynamicItems.push({ name, quantity });
+    }
+  }
+  
+  const messageEl = document.getElementById('deliveryPlanAddFormMessage');
+  messageEl.textContent = mode === 'edit' ? 'Updating...' : 'Saving...';
+  messageEl.className = 'form-message';
+  
+  try {
+    let data;
+    if (mode === 'edit') {
+      // Update existing plan
+      data = await api(`/delivery-plans/${planId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          category,
+          categoryDescription,
+          size,
+          displayName,
+          description,
+          price,
+          items: {
+            dynamicItems
+          }
+        })
+      });
+      messageEl.textContent = 'Delivery plan updated successfully!';
+    } else {
+      // Create new plan
+      data = await api('/delivery-plans', {
+        method: 'POST',
+        body: JSON.stringify({
+          category,
+          categoryDescription,
+          size,
+          displayName,
+          description,
+          price,
+          items: {
+            dynamicItems
+          }
+        })
+      });
+      messageEl.textContent = 'Delivery plan added successfully!';
+    }
+    
+    messageEl.classList.add('success');
+    
+    // Refresh delivery plans list
+    await loadDeliveryPlans();
+    
+    // Close modal after a short delay
+    setTimeout(() => {
+      closeDeliveryPlanAddModal();
+    }, 1000);
+    
+  } catch (error) {
+    messageEl.textContent = error.message || (mode === 'edit' ? 'Failed to update delivery plan' : 'Failed to add delivery plan');
+    messageEl.classList.add('error');
+  }
+});
+
+function closeDeliveryPlanAddModal() {
+  const modal = document.getElementById('deliveryPlanAddModal');
+  const saveBtn = document.getElementById('deliveryPlanAddSaveBtn');
+  
+  // Move focus away from modal before hiding it to avoid aria-hidden warning
+  if (document.activeElement === saveBtn || modal.contains(document.activeElement)) {
+    // Try to focus the button that opened the modal, or fallback to main content
+    const opener = modal.dataset.opener;
+    if (opener && document.getElementById(opener)) {
+      document.getElementById(opener).focus();
+    } else {
+      document.getElementById('newDeliveryPlanBtn')?.focus();
+    }
+  }
+  
+  modal.hidden = true;
+  modal.setAttribute('aria-hidden', 'true');
+  document.getElementById('deliveryPlanAddForm').reset();
+  document.getElementById('newCategoryLabel').style.display = 'none';
+  document.getElementById('categoryDescriptionLabel').style.display = 'none';
+  document.getElementById('newSizeLabel').style.display = 'none';
+  document.getElementById('deliveryPlanItemsContainer').innerHTML = '';
+  document.getElementById('deliveryPlanAddFormMessage').textContent = '';
+  document.getElementById('deliveryPlanAddFormMessage').className = 'form-message';
+}
+
+// Delete plan confirmation modal handlers
+document.getElementById('deletePlanCloseBtn')?.addEventListener('click', closeDeletePlanConfirmModal);
+document.getElementById('deletePlanCancelBtn')?.addEventListener('click', closeDeletePlanConfirmModal);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.getElementById('deletePlanConfirmModal').hidden) {
+    closeDeletePlanConfirmModal();
+  }
+});
+
+function closeDeletePlanConfirmModal() {
+  const modal = document.getElementById('deletePlanConfirmModal');
+  const opener = modal.dataset.opener;
+  
+  if (document.activeElement === document.getElementById('deletePlanConfirmBtn') || modal.contains(document.activeElement)) {
+    if (opener && document.getElementById(opener)) {
+      document.getElementById(opener).focus();
+    }
+  }
+  
+  modal.hidden = true;
+  modal.setAttribute('aria-hidden', 'true');
+  document.getElementById('deletePlanMessage').textContent = '';
+  document.getElementById('deletePlanMessage').className = 'form-message';
+}
+
+document.getElementById('deletePlanConfirmBtn')?.addEventListener('click', async function() {
+  const planId = this.dataset.planId;
+  const buttonId = this.dataset.buttonId;
+  const messageEl = document.getElementById('deletePlanMessage');
+  
+  this.disabled = true;
+  this.textContent = 'Deleting...';
+  messageEl.textContent = 'Deleting...';
+  messageEl.className = 'form-message';
+  
+  try {
+    await api(`/delivery-plans/${planId}`, { method: 'DELETE' });
+    messageEl.textContent = 'Delivery plan deleted successfully!';
+    messageEl.classList.add('success');
+    
+    // Refresh delivery plans list
+    await loadDeliveryPlans();
+    
+    // Close modal after a short delay
+    setTimeout(() => {
+      closeDeletePlanConfirmModal();
+    }, 1000);
+  } catch (error) {
+    messageEl.textContent = error.message || 'Failed to delete delivery plan';
+    messageEl.classList.add('error');
+  } finally {
+    this.disabled = false;
+    this.textContent = 'Delete Plan';
+  }
+});
 
 document.getElementById('addModalCloseBtn')?.addEventListener('click', closeAddModal);
 document.getElementById('addCancelBtn')?.addEventListener('click', closeAddModal);

@@ -18,6 +18,22 @@ function loadController(overrides) {
       findOneAndUpdate: overrides.saveSubscription,
       deleteMany: overrides.deleteSubscriptions
     },
+    '../models/DeliveryPlan': {
+      find: overrides.findDeliveryPlans || (() => ({
+        select: () => ({
+          lean: async () => overrides.deliveryPlans || [
+            {
+              displayName: 'Full Meal (Single)',
+              items: { dal: 'small', curry: 'small', chapati: 4, rice: 1, curd: 'small', dynamicItems: [] }
+            },
+            {
+              displayName: 'Full Meal (Family)',
+              items: { dal: 'large', curry: 'large', chapati: 6, rice: 1, curd: 'big', dynamicItems: [] }
+            }
+          ]
+        })
+      }))
+    },
     '../utils/orderEvents': { emitOrderUpdate: () => {} }
   };
   const cached = new Map();
@@ -270,6 +286,119 @@ test('saves edited preparation items on the permanent order without changing ord
   assert.ok(original.deliveryMemberId);
 });
 
+test('saves additional delivery items without changing amount or original subscription items', async () => {
+  const original = {
+    _id: new mongoose.Types.ObjectId(),
+    orderId: '26101100021',
+    customer: new mongoose.Types.ObjectId(),
+    type: 'tiffin',
+    status: 'ACCEPTED',
+    totalAmount: 160,
+    subscriptionStartDate: new Date('2026-10-12T00:00:00'),
+    subscriptionEndDate: new Date('2026-11-06T00:00:00'),
+    tiffinPlan: { packageType: 'curry-only', size: 'couple' },
+    items: [
+      { productName: 'Tiffin Plan — Curry-Only Package (Couple)', quantity: 1, subtotal: 160, fulfillment: 'delivery' }
+    ],
+    tiffinItems: [
+      { productName: 'Medium Dal', preparationType: 'mediumDal', quantity: 1 },
+      { productName: 'Medium Curry', preparationType: 'mediumCurry', quantity: 1 }
+    ],
+    tiffinItemsCustomized: false,
+    save: async function () {},
+    toObject: function () {
+      const { save, toObject, ...plainOrder } = this;
+      return plainOrder;
+    }
+  };
+  const loaded = loadController({
+    savedOrder: original,
+    findOrder: async () => original
+  });
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: {
+        items: [
+          { preparationType: 'mediumDal', quantity: 1, isAdditional: false },
+          { preparationType: 'mediumCurry', quantity: 1, isAdditional: false },
+          { preparationType: 'largeDal', quantity: 1, isAdditional: true },
+          { preparationType: 'mediumCurry', quantity: 2, isAdditional: true },
+          { preparationType: 'smallCurd', quantity: 1, isAdditional: true },
+          { preparationType: 'chapathi', quantity: 4, isAdditional: true },
+          { preparationType: 'riceBox', quantity: 1, isAdditional: true }
+        ]
+      },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(original.totalAmount, 160);
+  assert.equal(original.orderId, '26101100021');
+  assert.deepEqual(original.items.map((item) => item.productName), [
+    'Tiffin Plan — Curry-Only Package (Couple)'
+  ]);
+  assert.equal(original.tiffinItems.length, 6);
+  assert.equal(original.tiffinItems.filter((item) => !item.isAdditional).length, 1);
+  assert.equal(original.tiffinItems.filter((item) => item.isAdditional).length, 5);
+  const mergedCurry = original.tiffinItems.find((item) => item.preparationType === 'mediumCurry');
+  assert.equal(mergedCurry.quantity, 3);
+  assert.equal(mergedCurry.originalQuantity, 1);
+  assert.equal(mergedCurry.additionalQuantity, 2);
+  assert.equal(original.tiffinItems.find((item) => item.preparationType === 'chapathi').quantity, 4);
+  assert.equal(original.tiffinItems.find((item) => item.isAdditional && item.preparationType === 'largeDal').productName, 'Large Dal');
+  assert.equal(original.tiffinItems.find((item) => item.isAdditional && item.preparationType === 'largeDal').itemKey, 'dal');
+  assert.equal(original.tiffinItems.find((item) => item.isAdditional && item.preparationType === 'largeDal').size, 'large');
+  assert.equal(original.tiffinItems.find((item) => item.isAdditional && item.preparationType === 'chapathi').itemKey, 'chapati');
+  assert.equal(original.tiffinItems.find((item) => item.isAdditional && item.preparationType === 'chapathi').size, null);
+});
+
+test('rejects zero or invalid additional item quantities', async () => {
+  const original = {
+    _id: new mongoose.Types.ObjectId(),
+    type: 'tiffin',
+    totalAmount: 160,
+    items: [{ productName: 'Curry-Only', quantity: 1, fulfillment: 'delivery' }],
+    tiffinItems: [],
+    save: async function () {},
+    toObject: function () {
+      const { save, toObject, ...plainOrder } = this;
+      return plainOrder;
+    }
+  };
+  const loaded = loadController({ findOrder: async () => original });
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: { items: [{ preparationType: 'chapathi', quantity: 0, isAdditional: true }] },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(original.tiffinItems.length, 0);
+  assert.equal(original.totalAmount, 160);
+});
+
 test('order retrieval returns the persisted edited items instead of rebuilding package defaults', async () => {
   const editedItems = [{ productName: 'Big Curd', preparationType: 'bigCurd', quantity: 2 }];
   const savedOrder = {
@@ -479,4 +608,227 @@ test('admin orders API retains every plan item and the permanent order total', a
     ['Tiffin Plan — Full Meal Package (Family)', 1]
   ]);
   assert.equal(response.body.orders[0].totalAmount, 640);
+});
+
+test('merges matching items into existing items, never merges different sizes, and preserves canonical names', async () => {
+  const original = {
+    _id: new mongoose.Types.ObjectId(),
+    orderId: '26101100099',
+    type: 'tiffin',
+    totalAmount: 120,
+    tiffinPlan: { packageType: 'full', size: 'single' },
+    items: [
+      { productName: 'Tiffin Plan — Full Meal Package (Single)', quantity: 1, subtotal: 120, fulfillment: 'delivery' }
+    ],
+    tiffinItems: [
+      { productName: 'Small Dal', preparationType: 'smallDal', quantity: 1, originalQuantity: 1, additionalQuantity: 0 },
+      { productName: 'Small Curry', preparationType: 'smallCurry', quantity: 1, originalQuantity: 1, additionalQuantity: 0 },
+      { productName: 'Chapathi', preparationType: 'chapathi', quantity: 4, originalQuantity: 4, additionalQuantity: 0 },
+      { productName: 'Rice Box', preparationType: 'riceBox', quantity: 1, originalQuantity: 1, additionalQuantity: 0 },
+      { productName: 'Small Curd', preparationType: 'smallCurd', quantity: 1, originalQuantity: 1, additionalQuantity: 0 }
+    ],
+    tiffinItemsCustomized: false,
+    save: async function () {},
+    toObject: function () {
+      const { save, toObject, ...plainOrder } = this;
+      return plainOrder;
+    }
+  };
+
+  const loaded = loadController({
+    savedOrder: original,
+    findOrder: async () => original
+  });
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: {
+        items: [
+          // Existing items
+          { preparationType: 'smallDal', quantity: 1, isAdditional: false },
+          { preparationType: 'smallCurry', quantity: 1, isAdditional: false },
+          { preparationType: 'chapathi', quantity: 4, isAdditional: false },
+          { preparationType: 'riceBox', quantity: 1, isAdditional: false },
+          { preparationType: 'smallCurd', quantity: 1, isAdditional: false },
+          // Added items to merge
+          { itemKey: 'dal', size: 'small', quantity: 2, isAdditional: true }, // Dal + Small -> merges with Small Dal (1 + 2 = 3)
+          { itemKey: 'chapati', quantity: 2, isAdditional: true }, // Chapati -> merges with Chapathi (4 + 2 = 6)
+          { itemKey: 'rice', quantity: 1, isAdditional: true }, // Rice -> merges with Rice Box (1 + 1 = 2)
+          // Added item with different size
+          { itemKey: 'dal', size: 'large', quantity: 1, isAdditional: true }, // Dal + Large -> does NOT merge with Small Dal, creates Large Dal
+          // Added large curd
+          { itemKey: 'curd', size: 'large', quantity: 1, isAdditional: true } // Curd + Large -> creates Big Curd
+        ]
+      },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(original.totalAmount, 120); // Amount unchanged
+
+  // Verify Small Dal merged to 3
+  const smallDal = original.tiffinItems.find((i) => i.preparationType === 'smallDal');
+  assert.equal(smallDal.quantity, 3);
+  assert.equal(smallDal.originalQuantity, 1);
+  assert.equal(smallDal.additionalQuantity, 2);
+
+  // Verify Chapathi merged to 6
+  const chapathi = original.tiffinItems.find((i) => i.preparationType === 'chapathi');
+  assert.equal(chapathi.quantity, 6);
+  assert.equal(chapathi.originalQuantity, 4);
+  assert.equal(chapathi.additionalQuantity, 2);
+
+  // Verify Rice Box merged to 2
+  const rice = original.tiffinItems.find((i) => i.preparationType === 'riceBox');
+  assert.equal(rice.quantity, 2);
+  assert.equal(rice.originalQuantity, 1);
+  assert.equal(rice.additionalQuantity, 1);
+
+  // Verify Large Dal created separately and NOT merged with Small Dal
+  const largeDal = original.tiffinItems.find((i) => i.preparationType === 'largeDal');
+  assert.ok(largeDal, 'Large Dal must exist as separate entry');
+  assert.equal(largeDal.quantity, 1);
+  assert.equal(largeDal.originalQuantity, 0);
+  assert.equal(largeDal.additionalQuantity, 1);
+
+  // Verify Big Curd created with canonical name
+  const bigCurd = original.tiffinItems.find((i) => i.preparationType === 'bigCurd');
+  assert.ok(bigCurd, 'Big Curd must exist as canonical item');
+  assert.equal(bigCurd.productName, 'Big Curd');
+  assert.equal(bigCurd.quantity, 1);
+
+  // Total consolidated items = 7 (Small Dal, Small Curry, Chapathi, Rice Box, Small Curd, Large Dal, Big Curd)
+  assert.equal(original.tiffinItems.length, 7);
+});
+
+test('persists custom items added via + Add and validates invalid custom names', async () => {
+  const original = {
+    _id: new mongoose.Types.ObjectId(),
+    orderId: '26101100100',
+    type: 'tiffin',
+    totalAmount: 200,
+    tiffinPlan: { packageType: 'curry-only', size: 'single' },
+    items: [{ productName: 'Curry-Only', quantity: 1, fulfillment: 'delivery' }],
+    tiffinItems: [],
+    tiffinItemsCustomized: false,
+    save: async function () {},
+    toObject: function () {
+      const { save, toObject, ...plainOrder } = this;
+      return plainOrder;
+    }
+  };
+
+  const loaded = loadController({
+    savedOrder: original,
+    findOrder: async () => original
+  });
+
+  try {
+    // 1. Reject invalid custom name: "+ Add"
+    const res1 = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: {
+        items: [{ customName: '+ Add', quantity: 1, isAdditional: true }]
+      },
+      app: { get: () => null }
+    }, res1);
+    assert.equal(res1.statusCode, 400);
+
+    // 2. Reject empty custom name
+    const res2 = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: {
+        items: [{ customName: '   ', quantity: 1, isAdditional: true }]
+      },
+      app: { get: () => null }
+    }, res2);
+    assert.equal(res2.statusCode, 400);
+
+    // 3. Accept valid custom item
+    const res3 = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: {
+        items: [
+          { customName: 'Mango Pickle', size: 'small', quantity: 2, isAdditional: true }
+        ]
+      },
+      app: { get: () => null }
+    }, res3);
+    assert.equal(res3.statusCode, 200);
+    assert.equal(original.tiffinItems.length, 1);
+    assert.equal(original.tiffinItems[0].productName, 'Small Mango Pickle');
+    assert.equal(original.tiffinItems[0].quantity, 2);
+    assert.equal(original.tiffinItems[0].additionalQuantity, 2);
+  } finally {
+    loaded.restore();
+  }
+});
+
+test('repeated saves do not duplicate quantities or items', async () => {
+  const original = {
+    _id: new mongoose.Types.ObjectId(),
+    orderId: '26101100101',
+    type: 'tiffin',
+    totalAmount: 160,
+    tiffinPlan: { packageType: 'curry-only', size: 'couple' },
+    items: [{ productName: 'Curry-Only Couple', quantity: 1, fulfillment: 'delivery' }],
+    tiffinItems: [
+      { productName: 'Medium Dal', preparationType: 'mediumDal', quantity: 5, originalQuantity: 1, additionalQuantity: 4, isAdditional: true }
+    ],
+    tiffinItemsCustomized: true,
+    save: async function () {},
+    toObject: function () {
+      const { save, toObject, ...plainOrder } = this;
+      return plainOrder;
+    }
+  };
+
+  const loaded = loadController({
+    savedOrder: original,
+    findOrder: async () => original
+  });
+
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    // Save once
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: { items: original.tiffinItems },
+      app: { get: () => null }
+    }, response);
+
+    assert.equal(original.tiffinItems.length, 1);
+    assert.equal(original.tiffinItems[0].quantity, 5);
+
+    // Save again with same items
+    await loaded.controller.updateTiffinItems({
+      params: { id: String(original._id) },
+      body: { items: original.tiffinItems },
+      app: { get: () => null }
+    }, response);
+
+    assert.equal(original.tiffinItems.length, 1);
+    assert.equal(original.tiffinItems[0].quantity, 5);
+  } finally {
+    loaded.restore();
+  }
 });

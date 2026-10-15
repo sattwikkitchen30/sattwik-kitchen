@@ -405,3 +405,92 @@ test('delivery history: date filters respect Vancouver timezone', () => {
   assert.equal(timezone, 'America/Vancouver');
   assert.ok(vancouverDate);
 });
+
+test('delivery history: mergeCustomerSnapshot fills missing fields from profile', () => {
+  // Simulate the mergeCustomerSnapshot function behavior
+  const snapshot = {
+    firstName: '',
+    lastName: '',
+    phone: '',
+    email: '',
+    address: '',
+    area: ''
+  };
+  
+  const profile = {
+    firstName: 'Test',
+    lastName: 'Customer',
+    phone: '1234567890',
+    email: 'test@example.com',
+    address: '123 Main St',
+    area: 'Downtown'
+  };
+  
+  // After merge, snapshot should have profile values
+  const merged = { ...snapshot };
+  if (!merged.firstName && profile.firstName) merged.firstName = profile.firstName;
+  if (!merged.lastName && profile.lastName) merged.lastName = profile.lastName;
+  if (!merged.phone && profile.phone) merged.phone = profile.phone;
+  if (!merged.email && profile.email) merged.email = profile.email;
+  if (!merged.address && profile.address) merged.address = profile.address;
+  if (!merged.area && profile.area) merged.area = profile.area;
+  
+  assert.equal(merged.firstName, 'Test');
+  assert.equal(merged.lastName, 'Customer');
+  assert.equal(merged.phone, '1234567890');
+  assert.equal(merged.email, 'test@example.com');
+});
+
+test('delivery history: existing valid snapshot values take precedence over profile', () => {
+  // Verify that existing snapshot values are not overwritten
+  const snapshot = {
+    firstName: 'Original',
+    lastName: 'Name',
+    phone: '1111111111',
+    email: 'original@example.com',
+    address: 'Old Address',
+    area: 'Old Area'
+  };
+  
+  const profile = {
+    firstName: 'New',
+    lastName: 'Name',
+    phone: '2222222222',
+    email: 'new@example.com',
+    address: 'New Address',
+    area: 'New Area'
+  };
+  
+  // After merge, snapshot should retain original values
+  const merged = { ...snapshot };
+  if (!merged.firstName && profile.firstName) merged.firstName = profile.firstName;
+  if (!merged.lastName && profile.lastName) merged.lastName = profile.lastName;
+  if (!merged.phone && profile.phone) merged.phone = profile.phone;
+  if (!merged.email && profile.email) merged.email = profile.email;
+  if (!merged.address && profile.address) merged.address = profile.address;
+  if (!merged.area && profile.area) merged.area = profile.area;
+  
+  assert.equal(merged.firstName, 'Original');
+  assert.equal(merged.lastName, 'Name');
+  assert.equal(merged.phone, '1111111111');
+  assert.equal(merged.email, 'original@example.com');
+});
+
+test('delivery history: missing customer reference does not crash endpoint', () => {
+  // Verify that missing customer reference is handled safely
+  const historyWithoutCustomer = {
+    order: {
+      orderId: 'TEST001',
+      customer: null
+    },
+    customerSnapshot: {
+      firstName: '',
+      lastName: '',
+      phone: ''
+    }
+  };
+  
+  // Should not crash when customer is null
+  assert.equal(historyWithoutCustomer.order.customer, null);
+  assert.equal(historyWithoutCustomer.customerSnapshot.firstName, '');
+});

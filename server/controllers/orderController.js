@@ -8,6 +8,8 @@ const { emitOrderUpdate } = require('../utils/orderEvents');
 const { parseDateInput, formatDateKey, addDays, startOfDay, getSubscriptionServiceDates } = require('../utils/tiffinPreparation');
 const { getOrderServiceDates, getCurrentServiceDate, resolveDeliveryStatus, applyDeliveryStatus, withCurrentDeliveryStatus } = require('../utils/deliveryStatus');
 const { PREPARATION_TYPES, TIFFIN_PREPARATION_ITEMS, getTiffinPreparationType, buildDefaultTiffinItems, getLegacyOrderTiffinItems } = require('../utils/tiffinItems');
+const DeliveryPlan = require('../models/DeliveryPlan');
+const { extractDeliveryCatalogItems, resolveDeliveryCatalogSelection, normalizeItemKey, getCanonicalIdentity, resolveCustomItem } = require('../utils/deliveryCatalogItems');
 const { getOrderCustomer } = require('../utils/orderCustomer');
 const { normalizeStatus, transitionOrderStatus } = require('../utils/orderStatus');
 const { parseDateOnly } = require('../utils/dateFilter');
@@ -739,21 +741,43 @@ async function updateTiffinItems(req, res) {
   }
 
   const productIds = new Set();
+  let catalog = null;
+  const needsDeliveryCatalog = items.some((item) => (
+    item?.isAdditional
+    && !PREPARATION_TYPES.includes(item?.preparationType)
+    && !(item?.productId && mongoose.isValidObjectId(item.productId))
+  ));
+  if (needsDeliveryCatalog) {
+    const plans = await DeliveryPlan.find({}).select('items').lean();
+    catalog = extractDeliveryCatalogItems(plans);
+  }
+
   for (const item of items) {
     const quantity = Number(item?.quantity);
     if (!Number.isSafeInteger(quantity) || quantity < 1) {
       return res.status(400).json({ message: 'Tiffin item quantities must be positive whole numbers.' });
     }
-    if (item?.productId) {
-      if (!mongoose.isValidObjectId(item.productId)) {
-        return res.status(400).json({ message: 'Invalid product selected.' });
+    const hasValidProductId = item?.productId && mongoose.isValidObjectId(item.productId);
+    if (hasValidProductId) {
+      productIds.add(String(item.productId));
+    } else if (PREPARATION_TYPES.includes(item?.preparationType)) {
+      continue;
+    } else if (item?.isAdditional) {
+      const catalogItem = catalog?.find((entry) => (
+        entry.key === item.itemKey || entry.key === normalizeItemKey(item.productName)
+      ));
+      if (catalogItem) {
+        const resolved = resolveDeliveryCatalogSelection(catalogItem, item.size);
+        if (resolved.error) {
+          return res.status(400).json({ message: resolved.error });
+        }
+      } else {
+        const customRes = resolveCustomItem(item);
+        if (customRes.error) {
+          return res.status(400).json({ message: customRes.error });
+        }
       }
-      const productId = String(item.productId);
-      if (productIds.has(productId)) {
-        return res.status(400).json({ message: 'Each catalog product can only appear once.' });
-      }
-      productIds.add(productId);
-    } else if (!PREPARATION_TYPES.includes(item?.preparationType)) {
+    } else {
       return res.status(400).json({ message: 'Invalid tiffin preparation item.' });
     }
   }
@@ -767,10 +791,25 @@ async function updateTiffinItems(req, res) {
       .filter((item) => item.productId)
       .map((item) => [String(item.productId), item])
   );
-  const updatedItems = [];
+  const previousAmount = order.totalAmount;
+
+  const planDefaults = buildDefaultTiffinItems([{
+    packageType: order.tiffinPlan?.packageType,
+    size: order.tiffinPlan?.size,
+    quantity: (order.items || []).find((i) => i.category === 'Tiffin Plans')?.quantity || 1
+  }]);
+  const defaultQuantityByCanonical = new Map();
+  for (const def of planDefaults) {
+    const ident = getCanonicalIdentity(def);
+    defaultQuantityByCanonical.set(ident, def.quantity);
+  }
+
+  const resolvedItems = [];
   for (const item of items) {
     const quantity = Number(item?.quantity);
-    if (item?.productId) {
+    const isAdditional = Boolean(item?.isAdditional);
+    const hasValidProductId = item?.productId && mongoose.isValidObjectId(item.productId);
+    if (hasValidProductId) {
       const productId = String(item.productId);
       const product = productsById.get(productId);
       const savedProduct = savedProductsById.get(productId);
@@ -778,30 +817,121 @@ async function updateTiffinItems(req, res) {
       if (product && !product.active && !savedProduct) {
         return res.status(400).json({ message: 'Selected product is inactive.' });
       }
-      updatedItems.push({
+      resolvedItems.push({
         productId: product?._id || savedProduct.productId,
         productName: product?.name || savedProduct.productName,
         category: product?.category || savedProduct.category,
         preparationType: product ? getTiffinPreparationType(product.name) : savedProduct.preparationType,
-        quantity
+        quantity,
+        isAdditional,
+        originalQuantity: Number.isInteger(item.originalQuantity) ? item.originalQuantity : undefined,
+        additionalQuantity: Number.isInteger(item.additionalQuantity) ? item.additionalQuantity : undefined
       });
       continue;
     }
 
-    const preparationType = item?.preparationType;
-    const component = TIFFIN_PREPARATION_ITEMS[preparationType];
-    updatedItems.push({
-      productId: null,
-      productName: component.productName,
-      category: component.category,
-      preparationType,
-      quantity
-    });
+    if (PREPARATION_TYPES.includes(item?.preparationType)) {
+      const component = TIFFIN_PREPARATION_ITEMS[item.preparationType];
+      const mapped = {
+        smallDal: { itemKey: 'dal', size: 'small' },
+        mediumDal: { itemKey: 'dal', size: 'medium' },
+        largeDal: { itemKey: 'dal', size: 'large' },
+        smallCurry: { itemKey: 'curry', size: 'small' },
+        mediumCurry: { itemKey: 'curry', size: 'medium' },
+        largeCurry: { itemKey: 'curry', size: 'large' },
+        smallCurd: { itemKey: 'curd', size: 'small' },
+        bigCurd: { itemKey: 'curd', size: 'large' },
+        chapathi: { itemKey: 'chapati', size: null },
+        riceBox: { itemKey: 'rice', size: null }
+      }[item.preparationType];
+      resolvedItems.push({
+        productId: null,
+        productName: component.productName,
+        category: component.category,
+        preparationType: item.preparationType,
+        quantity,
+        isAdditional,
+        itemKey: item.itemKey || mapped?.itemKey || null,
+        size: item.size !== undefined ? item.size : (mapped?.size || null),
+        originalQuantity: Number.isInteger(item.originalQuantity) ? item.originalQuantity : undefined,
+        additionalQuantity: Number.isInteger(item.additionalQuantity) ? item.additionalQuantity : undefined
+      });
+      continue;
+    }
+
+    const catalogItem = catalog?.find((entry) => (
+      entry.key === item.itemKey || entry.key === normalizeItemKey(item.productName)
+    ));
+    if (catalogItem) {
+      const resolved = resolveDeliveryCatalogSelection(catalogItem, item.size);
+      resolvedItems.push({
+        ...resolved,
+        quantity,
+        isAdditional: true,
+        itemKey: catalogItem.key,
+        size: item.size || null,
+        originalQuantity: Number.isInteger(item.originalQuantity) ? item.originalQuantity : undefined,
+        additionalQuantity: Number.isInteger(item.additionalQuantity) ? item.additionalQuantity : undefined
+      });
+      continue;
+    }
+
+    const customRes = resolveCustomItem(item);
+    if (!customRes.error) {
+      resolvedItems.push({
+        ...customRes,
+        quantity,
+        isAdditional: true,
+        originalQuantity: Number.isInteger(item.originalQuantity) ? item.originalQuantity : undefined,
+        additionalQuantity: Number.isInteger(item.additionalQuantity) ? item.additionalQuantity : undefined
+      });
+    }
   }
 
-  order.tiffinItems = updatedItems;
+  const mergedMap = new Map();
+  for (const resItem of resolvedItems) {
+    const identity = getCanonicalIdentity(resItem);
+    if (!mergedMap.has(identity)) {
+      const defaultOriginal = defaultQuantityByCanonical.get(identity) || 0;
+      const originalQuantity = Number.isInteger(resItem.originalQuantity)
+        ? resItem.originalQuantity
+        : (!resItem.isAdditional ? (defaultOriginal || resItem.quantity) : defaultOriginal);
+      const additionalQuantity = Number.isInteger(resItem.additionalQuantity)
+        ? resItem.additionalQuantity
+        : (resItem.isAdditional ? resItem.quantity : Math.max(0, resItem.quantity - originalQuantity));
+
+      mergedMap.set(identity, {
+        productId: resItem.productId || null,
+        productName: resItem.productName,
+        category: resItem.category || 'Tiffin Preparation',
+        preparationType: resItem.preparationType || null,
+        quantity: resItem.quantity,
+        isAdditional: Boolean(resItem.isAdditional || additionalQuantity > 0),
+        itemKey: resItem.itemKey || null,
+        size: resItem.size || null,
+        originalQuantity,
+        additionalQuantity
+      });
+    } else {
+      const existing = mergedMap.get(identity);
+      existing.quantity += resItem.quantity;
+      const addQty = Number.isInteger(resItem.additionalQuantity)
+        ? resItem.additionalQuantity
+        : (resItem.isAdditional ? resItem.quantity : 0);
+      const origQty = Number.isInteger(resItem.originalQuantity)
+        ? resItem.originalQuantity
+        : (!resItem.isAdditional ? resItem.quantity : 0);
+      existing.additionalQuantity += addQty;
+      existing.originalQuantity += origQty;
+      existing.isAdditional = existing.additionalQuantity > 0 || existing.originalQuantity === 0;
+    }
+  }
+
+  order.tiffinItems = [...mergedMap.values()];
   order.tiffinItemsCustomized = true;
+  order.totalAmount = previousAmount;
   await order.save();
+  emitOrderUpdate(req.app, order);
   const responseOrder = order.toObject();
   Object.assign(responseOrder, withCurrentDeliveryStatus(responseOrder));
   return res.json({ message: 'Order items updated successfully.', order: responseOrder });

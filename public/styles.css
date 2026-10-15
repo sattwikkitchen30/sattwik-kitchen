@@ -1305,6 +1305,32 @@ a {
   color: #7a6b63;
   font-size: 13px;
   line-height: 1.4;
+  word-break: break-word;
+}
+
+.desc-toggle-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-left: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--green, #1b6541);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  display: inline;
+  vertical-align: baseline;
+}
+
+.desc-toggle-btn:hover {
+  color: var(--green-dark, #13492e);
+}
+
+.desc-toggle-btn:focus-visible {
+  outline: 2px solid var(--green, #1b6541);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .product-price-stock {

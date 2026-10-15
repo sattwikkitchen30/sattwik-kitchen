@@ -468,6 +468,48 @@ a { color: inherit; text-decoration: none; }
   font-size: 12px;
   font-weight: 700;
 }
+.pickup-filter-bar {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+.pickup-filter-bar label {
+  display: grid;
+  gap: 5px;
+  min-width: 220px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.pickup-filter-bar input {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: white;
+  color: var(--ink);
+}
+.pickup-filter-bar input:focus {
+  outline: 2px solid rgba(12,122,98,.2);
+  border-color: var(--green);
+}
+.pickup-filter-bar .pickup-search-field {
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+.pickup-filter-bar > button {
+  min-height: 42px;
+}
+.table-empty-message {
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
 .orders-tab {
   min-width: 108px;
   min-height: 38px;
@@ -568,6 +610,11 @@ th {
   gap: 6px;
   flex-wrap: wrap;
 }
+.tiffin-end-date-cell .saved-date {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--ink);
+}
 .tiffin-end-date-input,
 .delivery-start-date-input,
 .delivery-end-date-input,
@@ -645,6 +692,34 @@ th {
 }
 .assign-btn:hover {
   background: var(--green-dark);
+}
+.order-item-cell,
+#ordersTable td.order-item-cell {
+  max-width: 220px;
+  min-width: 140px;
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.4;
+}
+.order-item-cell .order-item-entry {
+  display: inline;
+  word-break: break-word;
+}
+.order-item-cell .edit-tiffin-items-btn {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #fdfaf5;
+  color: var(--brown);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.order-item-cell .edit-tiffin-items-btn:hover {
+  background: #f2e9dc;
 }
 .assign-btn:disabled {
   background: var(--muted);
@@ -726,10 +801,14 @@ th {
   .stats-grid { grid-template-columns: 1fr; }
   .toolbar { display: grid; grid-template-columns: 1fr 1fr; }
   .orders-actions { flex-wrap: wrap; justify-content: flex-end; }
-  .orders-filter-bar { align-items: stretch; }
+  .orders-filter-bar,
+  .pickup-filter-bar { align-items: stretch; }
   .orders-filter-bar label,
   .orders-filter-bar .orders-search-field,
-  .orders-filter-bar > button { flex: 1 1 100%; }
+  .orders-filter-bar > button,
+  .pickup-filter-bar label,
+  .pickup-filter-bar .pickup-search-field,
+  .pickup-filter-bar > button { flex: 1 1 100%; }
   .orders-result-count { min-height: 24px; }
 }
 .stacked-form {

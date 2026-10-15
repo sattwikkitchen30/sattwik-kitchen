@@ -73,6 +73,21 @@ orderSchema.index(
 );
 
 orderSchema.pre('validate', async function () {
+  if (Array.isArray(this.items) && this.items.length) {
+    this.items.forEach((item) => {
+      const name = String(item?.productName || '').trim();
+      const cat = String(item?.category || '').trim().toLowerCase();
+      const isDelivery = item?.fulfillment === 'delivery'
+        || cat === 'tiffin plans'
+        || cat === 'tiffin preparation'
+        || cat === 'tiffin'
+        || /^(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(/i.test(name);
+      item.fulfillment = isDelivery ? 'delivery' : 'pickup';
+    });
+    const deliveryCount = this.items.filter((item) => item.fulfillment === 'delivery').length;
+    this.fulfillment = deliveryCount === 0 ? 'pickup' : (deliveryCount === this.items.length ? 'delivery' : 'mixed');
+  }
+
   if (!this.orderId) {
     const { formatDateKey } = require('../utils/tiffinPreparation');
     const date = this.placedAt || this.createdAt || new Date();

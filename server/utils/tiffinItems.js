@@ -64,17 +64,78 @@ function buildDefaultTiffinItems(plans = []) {
   }));
 }
 
+function isDeliveryTiffinOrder(order) {
+  if (!order) return false;
+  const items = Array.isArray(order.items) ? order.items : [];
+
+  const hasDeliveryItems = items.some((item) => (item.fulfillment || order.fulfillment) === 'delivery');
+  const isOrderDeliveryFulfillment = order.fulfillment === 'delivery' || order.fulfillment === 'mixed';
+  if (!hasDeliveryItems && !isOrderDeliveryFulfillment) {
+    return false;
+  }
+
+  if (items.length > 0 && items.every((i) => i.fulfillment === 'pickup')) {
+    return false;
+  }
+
+  const hasDeliveryPlanItem = items.some((item) => {
+    const isDelivery = (item.fulfillment || order.fulfillment) === 'delivery';
+    if (!isDelivery) return false;
+    const cat = String(item.category || '').toLowerCase();
+    const name = String(item.productName || '');
+    return cat === 'tiffin plans'
+      || cat === 'tiffin preparation'
+      || cat === 'tiffin'
+      || /^(?:Tiffin Plan\s*[-—–:]\s*)?(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(/i.test(name)
+      || /^(?:Full Meal|Curry(?:-|\s+)Only)\b/i.test(name);
+  });
+
+  if (hasDeliveryPlanItem) return true;
+
+  const hasTiffinTypeOrPlan = order.type === 'tiffin'
+    || Boolean(order.tiffinPlan?.packageType);
+
+  if (hasTiffinTypeOrPlan && (hasDeliveryItems || isOrderDeliveryFulfillment)) {
+    return true;
+  }
+
+  return false;
+}
+
 function getLegacyOrderTiffinItems(order, fallbackPlan = null) {
   if (Array.isArray(order?.tiffinItems)
     && (order.tiffinItems.length > 0 || order.tiffinItemsCustomized)) {
     return order.tiffinItems;
   }
 
-  const packageItem = (order?.items || []).find((item) => item.category === 'Tiffin Plans');
+  const packageItem = (order?.items || []).find((item) => {
+    const isDelivery = item.fulfillment === 'delivery' || (!item.fulfillment && order.fulfillment === 'delivery');
+    const cat = String(item.category || '').toLowerCase();
+    const name = String(item.productName || '');
+    return isDelivery && (
+      cat === 'tiffin plans'
+      || cat === 'tiffin preparation'
+      || cat === 'tiffin'
+      || /^(?:Tiffin Plan\s*[-—–:]\s*)?(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(/i.test(name)
+      || /^(?:Full Meal|Curry(?:-|\s+)Only)\b/i.test(name)
+    );
+  }) || (order?.items || []).find((item) => item.category === 'Tiffin Plans');
+
   const packageQuantity = packageItem?.quantity || 1;
+  let packageType = order?.tiffinPlan?.packageType;
+  let size = order?.tiffinPlan?.size;
+
+  if ((!packageType || !size) && packageItem) {
+    const match = String(packageItem.productName || '').match(/(Full\s*Meal|Curry(?:-|\s*)Only)(?:\s+Package)?(?:\s*\(|\s*[-—–:]\s*)(Single|Couple|Family)\)?/i);
+    if (match) {
+      if (!packageType) packageType = /^curry/i.test(match[1]) ? 'curry-only' : 'full';
+      if (!size) size = match[2].toLowerCase();
+    }
+  }
+
   const orderPlan = {
-    packageType: order?.tiffinPlan?.packageType,
-    size: order?.tiffinPlan?.size,
+    packageType,
+    size,
     quantity: packageQuantity
   };
   const orderItems = buildDefaultTiffinItems([orderPlan]);
@@ -92,5 +153,6 @@ module.exports = {
   PREPARATION_TYPES,
   getTiffinPreparationType,
   buildDefaultTiffinItems,
-  getLegacyOrderTiffinItems
+  getLegacyOrderTiffinItems,
+  isDeliveryTiffinOrder
 };

@@ -73,7 +73,26 @@ function isOrderableItem(itemName) {
 }
 
 function parseTiffinPlanId(planId) {
-  const [packageType, ...sizeParts] = String(planId || '').split('-');
+  const str = String(planId || '').trim();
+  if (str.startsWith('curry-only-')) {
+    return {
+      packageType: 'curry-only',
+      size: str.slice('curry-only-'.length)
+    };
+  }
+  if (str.startsWith('curry-')) {
+    return {
+      packageType: 'curry-only',
+      size: str.slice('curry-'.length)
+    };
+  }
+  if (str.startsWith('full-')) {
+    return {
+      packageType: 'full',
+      size: str.slice('full-'.length)
+    };
+  }
+  const [packageType, ...sizeParts] = str.split('-');
   return {
     packageType: packageType === 'curry' ? 'curry-only' : packageType,
     size: sizeParts.join('-')
@@ -448,6 +467,73 @@ function createDynamicCategorySection(category, products) {
   }
 }
 
+function escapeProductHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+const PRODUCT_DESCRIPTION_MAX_CHARS = 100;
+
+function renderProductDescriptionHtml(description) {
+  if (!description || typeof description !== 'string' || !description.trim()) return '';
+  const text = description.trim();
+  if (text.length <= PRODUCT_DESCRIPTION_MAX_CHARS) {
+    return `<p class="product-description">${escapeProductHtml(text)}</p>`;
+  }
+  const truncated = text.slice(0, PRODUCT_DESCRIPTION_MAX_CHARS).trim();
+  return `<p class="product-description" data-full-text="${escapeProductHtml(text)}" data-truncated-text="${escapeProductHtml(truncated)}"><span class="desc-text">${escapeProductHtml(truncated)}</span> <button type="button" class="desc-toggle-btn" aria-expanded="false">...more</button></p>`;
+}
+
+function toggleProductDescription(toggleBtn) {
+  if (!toggleBtn) return;
+  const descContainer = toggleBtn.closest ? toggleBtn.closest('.product-description') : toggleBtn.parentElement;
+  if (!descContainer) return;
+  const descText = descContainer.querySelector ? descContainer.querySelector('.desc-text') : null;
+  const fullText = (descContainer.dataset && descContainer.dataset.fullText) || (descContainer.getAttribute && descContainer.getAttribute('data-full-text')) || '';
+  const truncatedText = (descContainer.dataset && descContainer.dataset.truncatedText) || (descContainer.getAttribute && descContainer.getAttribute('data-truncated-text')) || '';
+  const isExpanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+
+  if (isExpanded) {
+    if (descText) descText.textContent = truncatedText;
+    toggleBtn.textContent = '...more';
+    toggleBtn.setAttribute('aria-expanded', 'false');
+  } else {
+    if (descText) descText.textContent = fullText;
+    toggleBtn.textContent = '...less';
+    toggleBtn.setAttribute('aria-expanded', 'true');
+  }
+}
+
+function initStaticProductDescriptions() {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  document.querySelectorAll('.product-card .product-description').forEach((descEl) => {
+    if (descEl.dataset?.fullText || descEl.getAttribute?.('data-full-text')) return;
+    const fullText = (descEl.textContent || '').replace(/\s+/g, ' ').trim();
+    if (fullText.length > PRODUCT_DESCRIPTION_MAX_CHARS) {
+      const truncated = fullText.slice(0, PRODUCT_DESCRIPTION_MAX_CHARS).trim();
+      if (descEl.dataset) {
+        descEl.dataset.fullText = fullText;
+        descEl.dataset.truncatedText = truncated;
+      } else if (descEl.setAttribute) {
+        descEl.setAttribute('data-full-text', fullText);
+        descEl.setAttribute('data-truncated-text', truncated);
+      }
+      descEl.innerHTML = `<span class="desc-text">${escapeProductHtml(truncated)}</span> <button type="button" class="desc-toggle-btn" aria-expanded="false">...more</button>`;
+      const btn = descEl.querySelector('.desc-toggle-btn');
+      if (btn) {
+        btn.addEventListener('click', (e) => {
+          if (typeof e.stopPropagation === 'function') e.stopPropagation();
+          if (typeof e.preventDefault === 'function') e.preventDefault();
+          toggleProductDescription(btn);
+        });
+      }
+    }
+  });
+}
+
 function createProductCard(product) {
   const card = document.createElement('article');
   card.className = 'product-card';
@@ -467,16 +553,14 @@ function createProductCard(product) {
   const isOrderable = !isOutOfStock;
 
   // Display description if available, otherwise omit
-  const descriptionHtml = product.description && product.description.trim()
-    ? `<p class="product-description">${product.description.trim()}</p>`
-    : '';
+  const descriptionHtml = renderProductDescriptionHtml(product.description);
 
   card.innerHTML = `
     <div class="product-image-shell">
-      <img src="${product.image || 'assets/product-placeholder.svg'}" alt="${product.name}" />
+      <img src="${product.image || 'assets/product-placeholder.svg'}" alt="${escapeProductHtml(product.name)}" />
     </div>
     <div class="product-info">
-      <h4>${product.name}</h4>
+      <h4>${escapeProductHtml(product.name)}</h4>
       ${descriptionHtml}
       <div class="product-price-stock">
         <strong>${money(product.price)}</strong>
@@ -486,14 +570,23 @@ function createProductCard(product) {
     <div class="product-actions">
       ${isOrderable ? `
       <div class="qty-control">
-        <button type="button" class="qty-minus" aria-label="Decrease ${product.name} quantity">−</button>
+        <button type="button" class="qty-minus" aria-label="Decrease ${escapeProductHtml(product.name)} quantity">−</button>
         <span class="qty-value">${qty}</span>
-        <button type="button" class="qty-plus" aria-label="Increase ${product.name} quantity">+</button>
+        <button type="button" class="qty-plus" aria-label="Increase ${escapeProductHtml(product.name)} quantity">+</button>
       </div>
       <span class="auto-cart-note">Updates cart automatically</span>
       ` : ''}
     </div>
   `;
+
+  const toggleBtn = card.querySelector('.desc-toggle-btn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', (e) => {
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      toggleProductDescription(toggleBtn);
+    });
+  }
 
   // Only add event listeners for orderable products
   if (isOrderable) {
@@ -511,13 +604,53 @@ function createProductCard(product) {
   return card;
 }
 
+function extractTiffinMeta(item) {
+  let packageType = item.packageType;
+  let size = item.size;
+  
+  if ((!packageType || !size) && item.name) {
+    const match = item.name.match(/^(Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(\s*(Single|Couple|Family)\s*\)/i);
+    if (match) {
+      if (!packageType) {
+        packageType = /^curry/i.test(match[1]) ? 'curry-only' : 'full';
+      }
+      if (!size) {
+        size = match[2].toLowerCase();
+      }
+    }
+  }
+  return { packageType, size };
+}
+
+function syncTiffinPlanQuantity(packageType, size, quantity) {
+  if (!packageType || !size) return;
+  const directPkg = String(packageType).toLowerCase();
+  const legacyPkg = directPkg === 'curry-only' ? 'curry' : (directPkg === 'curry' ? 'curry-only' : directPkg);
+  const sizeLower = String(size).toLowerCase();
+  
+  const selectors = [
+    `[data-tiffin-qty="${directPkg}-${sizeLower}"]`,
+    `[data-tiffin-qty="${legacyPkg}-${sizeLower}"]`,
+    `[data-tiffin-plan="${directPkg}-${sizeLower}"] [data-tiffin-qty]`,
+    `[data-tiffin-plan="${legacyPkg}-${sizeLower}"] [data-tiffin-qty]`,
+    `[data-tiffin-plan="${directPkg}-${sizeLower}"] .qty-value`,
+    `[data-tiffin-plan="${legacyPkg}-${sizeLower}"] .qty-value`,
+    `[data-tiffin-package-type="${directPkg}"][data-tiffin-size="${sizeLower}"] .qty-value`,
+    `[data-tiffin-package-type="${legacyPkg}"][data-tiffin-size="${sizeLower}"] .qty-value`
+  ];
+  
+  const elements = document.querySelectorAll(selectors.join(', '));
+  elements.forEach((el) => {
+    el.textContent = String(Math.max(0, quantity));
+  });
+}
+
 function syncCatalogQuantity(item, quantity) {
   if (item.category === 'tiffin') {
-    // Find the plan card by matching packageType and size
-    const packageId = item.packageType === 'curry-only' ? 'curry' : item.packageType || 'custom';
-    const planId = `${packageId}-${item.size}`;
-    const value = document.querySelector(`[data-tiffin-qty="${planId}"]`);
-    if (value) value.textContent = String(quantity);
+    const { packageType, size } = extractTiffinMeta(item);
+    if (packageType && size) {
+      syncTiffinPlanQuantity(packageType, size, quantity);
+    }
     return;
   }
 
@@ -665,6 +798,7 @@ function renderCart() {
   cartCount.textContent = String(count + (customRequest ? 1 : 0));
   cartButton?.classList.toggle('has-items', hasEnquiry());
   updateSendState();
+  initializeTiffinPlanQuantities();
 }
 
 cartItems?.addEventListener('click', (event) => {
@@ -734,13 +868,17 @@ function cleanCartForTiffinOnly() {
 }
 
 function initializeTiffinPlanQuantities() {
-  cart.forEach((item, name) => {
-    if (item.category === 'tiffin') {
-      const packageId = item.packageType === 'curry-only' ? 'curry' : item.packageType || 'custom';
-      const planId = `${packageId}-${item.size}`;
-      const qtyDisplay = document.querySelector(`[data-tiffin-qty="${planId}"]`);
-      if (qtyDisplay) {
-        qtyDisplay.textContent = String(item.qty);
+  document.querySelectorAll('[data-tiffin-qty], .plan-card .qty-value').forEach((el) => {
+    el.textContent = '0';
+  });
+  cart.forEach((item) => {
+    if (item.category === 'tiffin' || isDeliveryEligibleName(item.name)) {
+      const { packageType, size } = extractTiffinMeta(item);
+      if (packageType && size) {
+        item.category = 'tiffin';
+        item.packageType = packageType;
+        item.size = size;
+        syncTiffinPlanQuantity(packageType, size, item.qty);
       }
     }
   });
@@ -857,6 +995,7 @@ function renderDeliveryPlans(plans) {
         grid.classList.toggle('hidden', !isActive);
         grid.classList.toggle('visible', isActive);
       });
+      initializeTiffinPlanQuantities();
     });
   });
 
@@ -881,7 +1020,7 @@ function renderDeliveryPlans(plans) {
     
     minus.addEventListener('click', () => {
       const currentQty = cart.get(planName)?.qty || 0;
-      updateQty(planName, price, currentQty - 1, null, 'tiffin', packageType, size);
+      updateQty(planName, price, Math.max(0, currentQty - 1), null, 'tiffin', packageType, size);
     });
     
     plus.addEventListener('click', () => {
@@ -1171,3 +1310,39 @@ document.querySelectorAll('.reveal').forEach((element) => observer.observe(eleme
 renderCart();
 loadSignedInCustomer();
 if (new URLSearchParams(window.location.search).get('checkout') === '1') setTimeout(openCart, 0);
+
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', (event) => {
+    const toggleBtn = event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('.desc-toggle-btn')
+      : null;
+    if (!toggleBtn) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (typeof event.stopPropagation === 'function') event.stopPropagation();
+    toggleProductDescription(toggleBtn);
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initStaticProductDescriptions);
+  } else {
+    initStaticProductDescriptions();
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    cart,
+    parseTiffinPlanId,
+    extractTiffinMeta,
+    syncTiffinPlanQuantity,
+    syncCatalogQuantity,
+    updateQty,
+    initializeTiffinPlanQuantities,
+    renderDeliveryPlans,
+    renderProductDescriptionHtml,
+    toggleProductDescription,
+    initStaticProductDescriptions,
+    createProductCard,
+    PRODUCT_DESCRIPTION_MAX_CHARS
+  };
+}

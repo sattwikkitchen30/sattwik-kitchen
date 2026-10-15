@@ -18,6 +18,8 @@ const customerLastName = document.getElementById('customerLastName');
 const customerPhone = document.getElementById('customerPhone');
 const customerEmail = document.getElementById('customerEmail');
 const customerArea = document.getElementById('customerArea');
+const pickupDateField = document.getElementById('pickupDateField');
+const pickupDateInput = document.getElementById('pickupDate');
 const customerFormStatus = document.getElementById('customerFormStatus');
 const sendCartWhatsApp = document.getElementById('sendCartWhatsApp');
 const orderToast = document.getElementById('orderToast');
@@ -47,8 +49,54 @@ function getOrderItemFulfillment(itemName, category = 'product') {
   return category === 'tiffin' && isDeliveryEligibleName(itemName) ? 'delivery' : 'pickup';
 }
 
+function localDateKey(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Vancouver',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function hasPickupFulfillment() {
+  return Array.from(cart.values()).some((item) => getOrderItemFulfillment(item.name, item.category) === 'pickup')
+    || (!cart.size && Boolean(customRequest));
+}
+
 function isOrderableItem(itemName) {
   return Boolean(normalizeProductName(itemName));
+}
+
+function parseTiffinPlanId(planId) {
+  const str = String(planId || '').trim();
+  if (str.startsWith('curry-only-')) {
+    return {
+      packageType: 'curry-only',
+      size: str.slice('curry-only-'.length)
+    };
+  }
+  if (str.startsWith('curry-')) {
+    return {
+      packageType: 'curry-only',
+      size: str.slice('curry-'.length)
+    };
+  }
+  if (str.startsWith('full-')) {
+    return {
+      packageType: 'full',
+      size: str.slice('full-'.length)
+    };
+  }
+  const [packageType, ...sizeParts] = str.split('-');
+  return {
+    packageType: packageType === 'curry' ? 'curry-only' : packageType,
+    size: sizeParts.join('-')
+  };
 }
 
 // Modal Elements
@@ -120,7 +168,11 @@ function hideOrderSuccessModal() {
 orderSuccessClose?.addEventListener('click', hideOrderSuccessModal);
 
 function persistCart() {
-  localStorage.setItem('sattwikCart', JSON.stringify({ items: Array.from(cart.values()), customRequest }));
+  localStorage.setItem('sattwikCart', JSON.stringify({
+    items: Array.from(cart.values()),
+    customRequest,
+    pickupDate: pickupDateInput?.value || ''
+  }));
 }
 
 function restoreCart() {
@@ -131,6 +183,7 @@ function restoreCart() {
       cart.set(item.name, item);
     });
     customRequest = saved.customRequest || '';
+    if (pickupDateInput) pickupDateInput.value = saved.pickupDate || '';
   } catch (error) {
     localStorage.removeItem('sattwikCart');
   }
@@ -301,20 +354,28 @@ function renderProductTiles(products) {
     });
   }
 
-  // Group products by category
-  const productsByCategory = {};
+  // Product-category aliases that share the existing Breakfast pickup panel.
+  const breakfastCategoryAliases = new Set(['breakfast', 'tiffin', 'tiffins']);
+  const productsByCategory = Object.create(null);
+  const seenProducts = new Set();
   products.forEach((product) => {
-    if (!productsByCategory[product.category]) {
-      productsByCategory[product.category] = [];
+    const productKey = String(product._id || product.name || '');
+    if (productKey && seenProducts.has(productKey)) return;
+    if (productKey) seenProducts.add(productKey);
+
+    const rawCategory = String(product.category || '').trim();
+    const category = breakfastCategoryAliases.has(rawCategory.toLowerCase()) ? 'Breakfast' : rawCategory;
+    if (!productsByCategory[category]) {
+      productsByCategory[category] = [];
     }
-    productsByCategory[product.category].push(product);
+    productsByCategory[category].push(product);
   });
 
-  // Define existing category mappings (exact match on the category string stored in DB)
+  // Map canonical product categories to the existing menu panels.
   const existingCategories = {
     'Pickles': { grid: picklesGrid, tab: 'pickles' },
     'Powders': { grid: powdersGrid, tab: 'powders' },
-    'Tiffins': { grid: tiffinsGrid, tab: 'breakfast' },
+    'Breakfast': { grid: tiffinsGrid, tab: 'breakfast' },
     'Sweets': { grid: sweetsGrid, tab: 'sweets' },
     'Snacks': { grid: snacksGrid, tab: 'snacks' }
   };
@@ -406,6 +467,73 @@ function createDynamicCategorySection(category, products) {
   }
 }
 
+function escapeProductHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+const PRODUCT_DESCRIPTION_MAX_CHARS = 100;
+
+function renderProductDescriptionHtml(description) {
+  if (!description || typeof description !== 'string' || !description.trim()) return '';
+  const text = description.trim();
+  if (text.length <= PRODUCT_DESCRIPTION_MAX_CHARS) {
+    return `<p class="product-description">${escapeProductHtml(text)}</p>`;
+  }
+  const truncated = text.slice(0, PRODUCT_DESCRIPTION_MAX_CHARS).trim();
+  return `<p class="product-description" data-full-text="${escapeProductHtml(text)}" data-truncated-text="${escapeProductHtml(truncated)}"><span class="desc-text">${escapeProductHtml(truncated)}</span> <button type="button" class="desc-toggle-btn" aria-expanded="false">...more</button></p>`;
+}
+
+function toggleProductDescription(toggleBtn) {
+  if (!toggleBtn) return;
+  const descContainer = toggleBtn.closest ? toggleBtn.closest('.product-description') : toggleBtn.parentElement;
+  if (!descContainer) return;
+  const descText = descContainer.querySelector ? descContainer.querySelector('.desc-text') : null;
+  const fullText = (descContainer.dataset && descContainer.dataset.fullText) || (descContainer.getAttribute && descContainer.getAttribute('data-full-text')) || '';
+  const truncatedText = (descContainer.dataset && descContainer.dataset.truncatedText) || (descContainer.getAttribute && descContainer.getAttribute('data-truncated-text')) || '';
+  const isExpanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+
+  if (isExpanded) {
+    if (descText) descText.textContent = truncatedText;
+    toggleBtn.textContent = '...more';
+    toggleBtn.setAttribute('aria-expanded', 'false');
+  } else {
+    if (descText) descText.textContent = fullText;
+    toggleBtn.textContent = '...less';
+    toggleBtn.setAttribute('aria-expanded', 'true');
+  }
+}
+
+function initStaticProductDescriptions() {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  document.querySelectorAll('.product-card .product-description').forEach((descEl) => {
+    if (descEl.dataset?.fullText || descEl.getAttribute?.('data-full-text')) return;
+    const fullText = (descEl.textContent || '').replace(/\s+/g, ' ').trim();
+    if (fullText.length > PRODUCT_DESCRIPTION_MAX_CHARS) {
+      const truncated = fullText.slice(0, PRODUCT_DESCRIPTION_MAX_CHARS).trim();
+      if (descEl.dataset) {
+        descEl.dataset.fullText = fullText;
+        descEl.dataset.truncatedText = truncated;
+      } else if (descEl.setAttribute) {
+        descEl.setAttribute('data-full-text', fullText);
+        descEl.setAttribute('data-truncated-text', truncated);
+      }
+      descEl.innerHTML = `<span class="desc-text">${escapeProductHtml(truncated)}</span> <button type="button" class="desc-toggle-btn" aria-expanded="false">...more</button>`;
+      const btn = descEl.querySelector('.desc-toggle-btn');
+      if (btn) {
+        btn.addEventListener('click', (e) => {
+          if (typeof e.stopPropagation === 'function') e.stopPropagation();
+          if (typeof e.preventDefault === 'function') e.preventDefault();
+          toggleProductDescription(btn);
+        });
+      }
+    }
+  });
+}
+
 function createProductCard(product) {
   const card = document.createElement('article');
   card.className = 'product-card';
@@ -419,31 +547,46 @@ function createProductCard(product) {
   if (qty > 0) card.classList.add('selected');
 
   const isOutOfStock = (product.stock || 0) === 0;
-  const stockDisplay = isOutOfStock ? 'Out of stock' : `${product.stock} available`;
+  const stockDisplay = isOutOfStock ? 'Out of Stock' : 'In Stock';
   const stockClass = isOutOfStock ? 'out-of-stock' : 'in-stock';
 
   const isOrderable = !isOutOfStock;
 
+  // Display description if available, otherwise omit
+  const descriptionHtml = renderProductDescriptionHtml(product.description);
+
   card.innerHTML = `
     <div class="product-image-shell">
-      <img src="${product.image || 'assets/product-placeholder.svg'}" alt="${product.name}" />
+      <img src="${product.image || 'assets/product-placeholder.svg'}" alt="${escapeProductHtml(product.name)}" />
     </div>
     <div class="product-info">
-      <h4>${product.name}</h4>
-      <strong>${money(product.price)}</strong>
-      <small class="stock-status ${stockClass}">${stockDisplay}</small>
+      <h4>${escapeProductHtml(product.name)}</h4>
+      ${descriptionHtml}
+      <div class="product-price-stock">
+        <strong>${money(product.price)}</strong>
+        <small class="stock-status ${stockClass}">${stockDisplay}</small>
+      </div>
     </div>
     <div class="product-actions">
       ${isOrderable ? `
       <div class="qty-control">
-        <button type="button" class="qty-minus" aria-label="Decrease ${product.name} quantity">−</button>
+        <button type="button" class="qty-minus" aria-label="Decrease ${escapeProductHtml(product.name)} quantity">−</button>
         <span class="qty-value">${qty}</span>
-        <button type="button" class="qty-plus" aria-label="Increase ${product.name} quantity">+</button>
+        <button type="button" class="qty-plus" aria-label="Increase ${escapeProductHtml(product.name)} quantity">+</button>
       </div>
       <span class="auto-cart-note">Updates cart automatically</span>
       ` : ''}
     </div>
   `;
+
+  const toggleBtn = card.querySelector('.desc-toggle-btn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', (e) => {
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      toggleProductDescription(toggleBtn);
+    });
+  }
 
   // Only add event listeners for orderable products
   if (isOrderable) {
@@ -461,8 +604,69 @@ function createProductCard(product) {
   return card;
 }
 
+function extractTiffinMeta(item) {
+  let packageType = item.packageType;
+  let size = item.size;
+  
+  if ((!packageType || !size) && item.name) {
+    const match = item.name.match(/^(Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(\s*(Single|Couple|Family)\s*\)/i);
+    if (match) {
+      if (!packageType) {
+        packageType = /^curry/i.test(match[1]) ? 'curry-only' : 'full';
+      }
+      if (!size) {
+        size = match[2].toLowerCase();
+      }
+    }
+  }
+  return { packageType, size };
+}
+
+function syncTiffinPlanQuantity(packageType, size, quantity) {
+  if (!packageType || !size) return;
+  const directPkg = String(packageType).toLowerCase();
+  const legacyPkg = directPkg === 'curry-only' ? 'curry' : (directPkg === 'curry' ? 'curry-only' : directPkg);
+  const sizeLower = String(size).toLowerCase();
+  
+  const selectors = [
+    `[data-tiffin-qty="${directPkg}-${sizeLower}"]`,
+    `[data-tiffin-qty="${legacyPkg}-${sizeLower}"]`,
+    `[data-tiffin-plan="${directPkg}-${sizeLower}"] [data-tiffin-qty]`,
+    `[data-tiffin-plan="${legacyPkg}-${sizeLower}"] [data-tiffin-qty]`,
+    `[data-tiffin-plan="${directPkg}-${sizeLower}"] .qty-value`,
+    `[data-tiffin-plan="${legacyPkg}-${sizeLower}"] .qty-value`,
+    `[data-tiffin-package-type="${directPkg}"][data-tiffin-size="${sizeLower}"] .qty-value`,
+    `[data-tiffin-package-type="${legacyPkg}"][data-tiffin-size="${sizeLower}"] .qty-value`
+  ];
+  
+  const elements = document.querySelectorAll(selectors.join(', '));
+  elements.forEach((el) => {
+    el.textContent = String(Math.max(0, quantity));
+  });
+}
+
+function syncCatalogQuantity(item, quantity) {
+  if (item.category === 'tiffin') {
+    const { packageType, size } = extractTiffinMeta(item);
+    if (packageType && size) {
+      syncTiffinPlanQuantity(packageType, size, quantity);
+    }
+    return;
+  }
+
+  document.querySelectorAll('.product-card').forEach((card) => {
+    if (card.dataset.name !== item.name) return;
+    const value = card.querySelector('.qty-value');
+    if (value) value.textContent = String(quantity);
+    card.classList.toggle('selected', quantity > 0);
+
+    const plusButton = card.querySelector('.qty-plus');
+    const product = productMap.get(item.name);
+    if (plusButton && product) plusButton.disabled = quantity >= (product.stock || 0);
+  });
+}
+
 function updateQty(name, price, nextQty, maxStock = null, category = 'product', packageType = null, size = null) {
-  const currentQty = cart.get(name)?.qty || 0;
   const safeQty = Math.max(0, Number(nextQty) || 0);
   
   if (!isOrderableItem(name) && safeQty > 0) {
@@ -476,34 +680,14 @@ function updateQty(name, price, nextQty, maxStock = null, category = 'product', 
     return;
   }
   
-  // Prevent going below 1 if item is in cart (allow 0 to remove)
-  if (currentQty > 0 && safeQty === 0) {
-    // Allow removal by going to 0
+  if (safeQty === 0) {
     cart.delete(name);
-  } else if (safeQty === 0) {
-    // Don't add item with 0 quantity
-    return;
   } else {
     cart.set(name, { name, price, qty: safeQty, category, packageType, size });
   }
-  
+
+  syncCatalogQuantity({ name, category, packageType, size }, safeQty);
   persistCart();
-
-  document.querySelectorAll('.product-card').forEach((card) => {
-    if (card.dataset.name === name) {
-      const value = card.querySelector('.qty-value');
-      const count = cart.get(name)?.qty || 0;
-      if (value) value.textContent = String(count);
-      card.classList.toggle('selected', count > 0);
-      
-      // Disable plus button if at max stock
-      const plusBtn = card.querySelector('.qty-plus');
-      if (plusBtn && maxStock !== null) {
-        plusBtn.disabled = count >= maxStock;
-      }
-    }
-  });
-
   renderCart();
 }
 
@@ -512,12 +696,20 @@ function hasEnquiry() {
 }
 
 function customerDetailsValid() {
-  return [customerFirstName, customerLastName, customerPhone, customerEmail, customerArea].every((field) => field && field.value.trim() && field.checkValidity());
+  const contactDetailsValid = [customerFirstName, customerLastName, customerPhone, customerEmail, customerArea]
+    .every((field) => field && field.value.trim() && field.checkValidity());
+  const pickupDateValid = Boolean(pickupDateInput?.value && pickupDateInput.checkValidity());
+  return contactDetailsValid && pickupDateValid;
 }
 
 function updateSendState() {
   const hasItems = hasEnquiry();
   customerToken = localStorage.getItem('sattwikCustomerToken') || '';
+  if (pickupDateField) pickupDateField.hidden = !hasItems;
+  if (pickupDateInput) {
+    pickupDateInput.required = hasItems;
+    pickupDateInput.min = localDateKey();
+  }
   
   if (sendCartWhatsApp) {
     sendCartWhatsApp.disabled = !hasItems;
@@ -531,6 +723,12 @@ function updateSendState() {
     customerFormStatus.classList.remove('ready');
   } else if (!customerToken) {
     customerFormStatus.textContent = 'Please log in to place your order.';
+    customerFormStatus.classList.add('ready');
+  } else if (!pickupDateInput?.value) {
+    customerFormStatus.textContent = 'Please select a Pickup Date for your order.';
+    customerFormStatus.classList.add('ready');
+  } else if (!pickupDateInput.checkValidity()) {
+    customerFormStatus.textContent = 'Pickup Date must be today or a future date.';
     customerFormStatus.classList.add('ready');
   } else if (!customerDetailsValid()) {
     customerFormStatus.textContent = 'Please complete your contact details below.';
@@ -600,6 +798,7 @@ function renderCart() {
   cartCount.textContent = String(count + (customRequest ? 1 : 0));
   cartButton?.classList.toggle('has-items', hasEnquiry());
   updateSendState();
+  initializeTiffinPlanQuantities();
 }
 
 cartItems?.addEventListener('click', (event) => {
@@ -611,30 +810,17 @@ cartItems?.addEventListener('click', (event) => {
       // Get current stock from product map
       const product = productMap.get(productName);
       const maxStock = product ? (product.stock || 0) : null;
-      updateQty(productName, item.price, Number(item.qty) + Number(stepper.dataset.delta), maxStock);
+      updateQty(productName, item.price, Number(item.qty) + Number(stepper.dataset.delta), maxStock, item.category, item.packageType, item.size);
     }
     return;
   }
   const removeButton = event.target.closest('[data-remove]');
   if (removeButton) {
     const productName = removeButton.dataset.remove;
+    const item = cart.get(productName);
     cart.delete(productName);
+    if (item) syncCatalogQuantity(item, 0);
     persistCart();
-    document.querySelectorAll('.product-card').forEach((card) => {
-      if (card.dataset.name === productName) {
-        const value = card.querySelector('.qty-value');
-        if (value) value.textContent = '0';
-        card.classList.remove('selected');
-        
-        // Re-enable plus button after removal
-        const plusBtn = card.querySelector('.qty-plus');
-        if (plusBtn) {
-          const product = productMap.get(productName);
-          const maxStock = product ? (product.stock || 0) : null;
-          plusBtn.disabled = maxStock === 0;
-        }
-      }
-    });
     renderCart();
   }
 });
@@ -682,18 +868,245 @@ function cleanCartForTiffinOnly() {
 }
 
 function initializeTiffinPlanQuantities() {
-  cart.forEach((item, name) => {
-    if (item.category === 'tiffin' && isOrderableItem(name)) {
-      const planId = `${item.packageType}-${item.size}`;
-      const qtyDisplay = document.querySelector(`[data-tiffin-qty="${planId}"]`);
-      if (qtyDisplay) {
-        qtyDisplay.textContent = String(item.qty);
+  document.querySelectorAll('[data-tiffin-qty], .plan-card .qty-value').forEach((el) => {
+    el.textContent = '0';
+  });
+  cart.forEach((item) => {
+    if (item.category === 'tiffin' || isDeliveryEligibleName(item.name)) {
+      const { packageType, size } = extractTiffinMeta(item);
+      if (packageType && size) {
+        item.category = 'tiffin';
+        item.packageType = packageType;
+        item.size = size;
+        syncTiffinPlanQuantity(packageType, size, item.qty);
       }
     }
   });
 }
 
-fetchProducts();
+async function fetchDeliveryPlans() {
+  try {
+    const response = await fetch('/api/delivery-plans/public');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Failed to load delivery plans');
+    renderDeliveryPlans(data.plans || []);
+  } catch (error) {
+    console.error('Failed to load delivery plans:', error);
+    document.getElementById('plansContainer').innerHTML = '<p class="error">Could not load delivery plans. Please refresh the page.</p>';
+  }
+}
+
+function renderDeliveryPlans(plans) {
+  const container = document.getElementById('plansContainer');
+  const toggle = document.getElementById('planToggle');
+  
+  if (!container || !toggle) return;
+  
+  if (!plans || plans.length === 0) {
+    container.innerHTML = '<p>No delivery plans available at this time.</p>';
+    return;
+  }
+  
+  // Group plans by category
+  const categories = {};
+  plans.forEach(plan => {
+    if (!categories[plan.category]) {
+      categories[plan.category] = [];
+    }
+    categories[plan.category].push(plan);
+  });
+
+  // Sort plans within each category: Single → Couple → Family (for tiffin plans only)
+  const sizeOrder = { single: 0, couple: 1, family: 2 };
+  Object.keys(categories).forEach(cat => {
+    categories[cat].sort((a, b) => {
+      const orderA = sizeOrder[a.size] ?? 999;
+      const orderB = sizeOrder[b.size] ?? 999;
+      // If both have valid sizes, sort by size order
+      if (orderA !== 999 && orderB !== 999) {
+        return orderA - orderB;
+      }
+      // If one has valid size, it comes first
+      if (orderA !== 999) return -1;
+      if (orderB !== 999) return 1;
+      // If neither has valid size, sort alphabetically by display name
+      return a.displayName.localeCompare(b.displayName);
+    });
+  });
+
+  // Create category buttons - ensure Full Meal is first/default, then Curry-Only, then others alphabetically
+  const categoryNames = Object.keys(categories);
+  const sortedCategories = categoryNames.sort((a, b) => {
+    const categoryOrder = { 'Full Meal': 0, 'Curry-Only': 1 };
+    const orderA = categoryOrder[a] ?? 999;
+    const orderB = categoryOrder[b] ?? 999;
+    if (orderA !== orderB) return orderA - orderB;
+    return a.localeCompare(b);
+  });
+  
+  toggle.innerHTML = sortedCategories.map((cat, index) => {
+    const displayName = cat === 'Full Meal' ? 'Full meal packages' : 
+                         cat === 'Curry-Only' ? 'Only curries' : 
+                         cat;
+    return `<button class="${index === 0 ? 'active' : ''}" data-plan-category="${cat}">${displayName}</button>`;
+  }).join('');
+
+  // Create plan grids for each category
+  container.innerHTML = sortedCategories.map((cat, index) => `
+    <div class="plans-grid reveal ${index === 0 ? 'visible' : 'hidden'}" data-plan-grid="${cat}">
+      ${categories[cat].map(plan => {
+        const planId = `${plan.packageType || 'custom'}-${plan.size}`;
+        const itemsList = renderPlanItems(plan);
+        const isPopular = plan.category === 'Full Meal' && plan.size === 'couple';
+        const isGreatForTwo = plan.category === 'Curry-Only' && plan.size === 'couple';
+        const featuredClass = (isPopular || isGreatForTwo) ? 'featured' : '';
+        const badge = isPopular ? '<div class="popular">POPULAR CHOICE</div>' : '';
+        const greatForTwoLabel = isGreatForTwo ? '<div class="great-for-two">GREAT FOR TWO</div>' : '';
+        return `
+          <article class="plan-card ${featuredClass}" data-tiffin-plan="${planId}" data-tiffin-price="${plan.price}" data-tiffin-package-type="${plan.packageType}" data-tiffin-size="${plan.size}" data-tiffin-display-name="${plan.displayName}">
+            ${badge}
+            ${greatForTwoLabel}
+            <div class="plan-top"><span>${plan.size.charAt(0).toUpperCase() + plan.size.slice(1)}</span><strong>$${plan.price}</strong></div>
+            <p>${plan.description || plan.displayName}</p>
+            <ul>${itemsList}</ul>
+            <div class="plan-actions">
+              <div class="qty-control">
+                <button type="button" class="qty-minus" data-tiffin-action="decrease" data-tiffin-plan="${planId}">−</button>
+                <span class="qty-value" data-tiffin-qty="${planId}">0</span>
+                <button type="button" class="qty-plus" data-tiffin-action="increase" data-tiffin-plan="${planId}">+</button>
+              </div>
+              <button type="button" class="plan-choose-btn" data-tiffin-choose="${planId}">Choose Plan</button>
+            </div>
+          </article>
+        `;
+      }).join('')}
+    </div>
+  `).join('');
+  
+  // Add category toggle listeners
+  toggle.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      toggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const category = btn.dataset.planCategory;
+      container.querySelectorAll('[data-plan-grid]').forEach(grid => {
+        const isActive = grid.dataset.planGrid === category;
+        grid.classList.toggle('hidden', !isActive);
+        grid.classList.toggle('visible', isActive);
+      });
+      initializeTiffinPlanQuantities();
+    });
+  });
+
+  // Add plan event listeners
+  container.querySelectorAll('.plan-card').forEach(card => {
+    const planId = card.dataset.tiffinPlan;
+    const price = Number(card.dataset.tiffinPrice);
+    const packageType = card.dataset.tiffinPackageType;
+    const size = card.dataset.tiffinSize;
+    const displayName = card.querySelector('.plan-top span')?.textContent || size;
+    
+    // Generate plan name for cart key (backward compatible with order logic)
+    const planName = packageType === 'full' 
+      ? `Full Meal Package (${displayName.charAt(0).toUpperCase() + displayName.slice(1)})`
+      : packageType === 'curry-only'
+      ? `Curry-Only Package (${displayName.charAt(0).toUpperCase() + displayName.slice(1)})`
+      : `${planId}`;
+    
+    const minus = card.querySelector('.qty-minus');
+    const plus = card.querySelector('.qty-plus');
+    const choose = card.querySelector('.plan-choose-btn');
+    
+    minus.addEventListener('click', () => {
+      const currentQty = cart.get(planName)?.qty || 0;
+      updateQty(planName, price, Math.max(0, currentQty - 1), null, 'tiffin', packageType, size);
+    });
+    
+    plus.addEventListener('click', () => {
+      const currentQty = cart.get(planName)?.qty || 0;
+      updateQty(planName, price, currentQty + 1, null, 'tiffin', packageType, size);
+    });
+    
+    choose.addEventListener('click', () => {
+      const currentQty = cart.get(planName)?.qty || 0;
+      updateQty(planName, price, currentQty + 1, null, 'tiffin', packageType, size);
+    });
+  });
+  
+  // Initialize quantities from cart
+  initializeTiffinPlanQuantities();
+}
+
+function renderPlanItems(plan) {
+  const items = [];
+  
+  // Map size to ounces
+  const sizeToOz = { small: '8 oz', medium: '12 oz', large: '16 oz' };
+  
+  if (plan.items) {
+    // Check for dynamicItems first (new structure)
+    if (plan.items.dynamicItems && plan.items.dynamicItems.length > 0) {
+      plan.items.dynamicItems.forEach(item => {
+        // Convert quantity names to ounces if they match size names
+        let quantity = item.quantity;
+        if (sizeToOz[quantity]) {
+          quantity = sizeToOz[quantity];
+        }
+        items.push(`${quantity} ${item.name}`);
+      });
+    } else {
+      // Fallback to legacy fixed structure
+      // Dal
+      if (plan.items.dal) {
+        items.push(`${sizeToOz[plan.items.dal]} dal`);
+      }
+      
+      // Curry
+      if (plan.items.curry) {
+        items.push(`${sizeToOz[plan.items.curry]} curry`);
+      }
+      
+      // Chapati (only for full meal)
+      if (plan.packageType === 'full' && plan.items.chapati > 0) {
+        items.push(`${plan.items.chapati} chapati`);
+      }
+      
+      // Rice (only for full meal)
+      if (plan.packageType === 'full' && plan.items.rice > 0) {
+        items.push(`${plan.items.rice * 16} oz rice`);
+      }
+      
+      // Curd (only for full meal)
+      if (plan.packageType === 'full' && plan.items.curd) {
+        items.push('Homemade curd');
+      }
+    }
+  }
+  
+  // Add standard items for full meal packages only
+  if (plan.packageType === 'full') {
+    items.push('Sweet once a week');
+    items.push('Friday special');
+  }
+  
+  // For curry-only, add Monday–Friday service
+  if (plan.packageType === 'curry-only') {
+    items.push('Monday–Friday service');
+  }
+  
+  return items.map(item => `<li>✓ ${item}</li>`).join('');
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    fetchProducts();
+    fetchDeliveryPlans();
+  });
+} else {
+  fetchProducts();
+  fetchDeliveryPlans();
+}
 
 customerDetailsForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -713,7 +1126,11 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
   if (!customerDetailsValid()) {
     customerDetailsForm.reportValidity?.();
     if (customerFormStatus) {
-      customerFormStatus.textContent = 'Please complete all required fields before placing your order.';
+      customerFormStatus.textContent = !pickupDateInput?.value
+        ? 'Please select a Pickup Date for your order.'
+        : !pickupDateInput.checkValidity()
+          ? 'Pickup Date must be today or a future date.'
+          : 'Please complete all required fields before placing your order.';
       customerFormStatus.classList.add('ready');
     }
     return;
@@ -752,10 +1169,11 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
       packageType: item.packageType,
       size: item.size,
       quantity: item.qty,
-      fulfillment: getOrderItemFulfillment(item.name)
+      fulfillment: getOrderItemFulfillment(item.name, item.category)
     })),
     type: customRequest ? 'custom' : (cartItemsList.some((item) => item.category === 'tiffin') ? 'tiffin' : 'product')
   };
+  payload.pickupDate = pickupDateInput.value;
 
   if (sendCartWhatsApp) {
     sendCartWhatsApp.disabled = true;
@@ -791,6 +1209,7 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
     const whatsappUrl = `https://wa.me/16725881282?text=${encodeURIComponent(whatsappText)}`;
 
     // Clear cart after successful database order creation
+    cartItemsList.forEach((item) => syncCatalogQuantity(item, 0));
     cart.clear();
     customRequest = '';
     localStorage.removeItem('sattwikCustomAmount');
@@ -831,6 +1250,14 @@ customerDetailsForm?.addEventListener('submit', async (event) => {
   field?.addEventListener('change', updateSendState);
 });
 
+pickupDateInput?.addEventListener('input', () => {
+  persistCart();
+  updateSendState();
+});
+pickupDateInput?.addEventListener('change', () => {
+  persistCart();
+  updateSendState();
+});
 document.getElementById('addCustomOrder')?.addEventListener('click', () => {
   const input = document.getElementById('customOrderText');
   const status = document.getElementById('customOrderStatus');
@@ -853,84 +1280,7 @@ document.getElementById('addCustomOrder')?.addEventListener('click', () => {
   openCart();
 });
 
-// Tiffin Plan quantity controls
-document.querySelectorAll('[data-tiffin-action]').forEach((button) => {
-  button.addEventListener('click', (event) => {
-    event.preventDefault();
-    const action = button.dataset.tiffinAction;
-    const planId = button.dataset.tiffinPlan;
-    const planCard = document.querySelector(`[data-tiffin-plan="${planId}"]`);
-    const price = Number(planCard?.dataset.tiffinPrice || 0);
-    
-    // Parse plan ID to get package type and size
-    const [packageType, size] = planId.split('-');
-    const planName = `${packageType === 'full' ? 'Full Meal Package' : 'Curry-Only Package'} (${size.charAt(0).toUpperCase() + size.slice(1)})`;
-    
-    const currentQty = cart.get(planName)?.qty || 0;
-    const nextQty = action === 'increase' ? currentQty + 1 : currentQty - 1;
-    
-    // Update the cart with the new quantity
-    if (nextQty === 0) {
-      cart.delete(planName);
-    } else {
-      cart.set(planName, { name: planName, price, qty: nextQty, category: 'tiffin', packageType, size });
-    }
-    
-    persistCart();
-    renderCart();
-    
-    // Update the display quantity on the plan card
-    const qtyDisplay = document.querySelector(`[data-tiffin-qty="${planId}"]`);
-    if (qtyDisplay) {
-      qtyDisplay.textContent = String(cart.get(planName)?.qty || 0);
-    }
-  });
-});
-
-// Tiffin Plan "Choose Plan" buttons
-document.querySelectorAll('[data-tiffin-choose]').forEach((button) => {
-  button.addEventListener('click', (event) => {
-    event.preventDefault();
-    const planId = button.dataset.tiffinChoose;
-    const planCard = document.querySelector(`[data-tiffin-plan="${planId}"]`);
-    const price = Number(planCard?.dataset.tiffinPrice || 0);
-    
-    // Parse plan ID to get package type and size
-    const [packageType, size] = planId.split('-');
-    const planName = `${packageType === 'full' ? 'Full Meal Package' : 'Curry-Only Package'} (${size.charAt(0).toUpperCase() + size.slice(1)})`;
-    
-    // If quantity is 0, set it to 1. If already > 0, just open cart
-    const currentQty = cart.get(planName)?.qty || 0;
-    if (currentQty === 0) {
-      cart.set(planName, { name: planName, price, qty: 1, category: 'tiffin', packageType, size });
-      persistCart();
-      
-      // Update the display quantity on the plan card
-      const qtyDisplay = document.querySelector(`[data-tiffin-qty="${planId}"]`);
-      if (qtyDisplay) {
-        qtyDisplay.textContent = '1';
-      }
-    }
-    
-    renderCart();
-    openCart();
-  });
-});
-
-document.querySelectorAll('.plan-toggle button').forEach((button) => {
-  button.addEventListener('click', () => {
-    document.querySelectorAll('.plan-toggle button').forEach((item) => item.classList.toggle('active', item === button));
-    const full = document.getElementById('fullPlans');
-    const curry = document.getElementById('curryPlans');
-    if (button.dataset.plan === 'full') {
-      full?.classList.remove('hidden');
-      curry?.classList.add('hidden');
-    } else {
-      curry?.classList.remove('hidden');
-      full?.classList.add('hidden');
-    }
-  });
-});
+// Old hardcoded tiffin plan event listeners removed - now handled dynamically in renderDeliveryPlans()
 
 document.getElementById('orderForm')?.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -960,3 +1310,39 @@ document.querySelectorAll('.reveal').forEach((element) => observer.observe(eleme
 renderCart();
 loadSignedInCustomer();
 if (new URLSearchParams(window.location.search).get('checkout') === '1') setTimeout(openCart, 0);
+
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', (event) => {
+    const toggleBtn = event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('.desc-toggle-btn')
+      : null;
+    if (!toggleBtn) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (typeof event.stopPropagation === 'function') event.stopPropagation();
+    toggleProductDescription(toggleBtn);
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initStaticProductDescriptions);
+  } else {
+    initStaticProductDescriptions();
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    cart,
+    parseTiffinPlanId,
+    extractTiffinMeta,
+    syncTiffinPlanQuantity,
+    syncCatalogQuantity,
+    updateQty,
+    initializeTiffinPlanQuantities,
+    renderDeliveryPlans,
+    renderProductDescriptionHtml,
+    toggleProductDescription,
+    initStaticProductDescriptions,
+    createProductCard,
+    PRODUCT_DESCRIPTION_MAX_CHARS
+  };
+}

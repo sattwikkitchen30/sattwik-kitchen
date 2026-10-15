@@ -151,6 +151,17 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
     if (search) search.value = '';
     renderOrdersTable();
   });
+  document.getElementById('pickupProductSearch')?.addEventListener('input', () => {
+    renderFilteredProductsTable();
+  });
+  document.getElementById('pickupProductSearch')?.addEventListener('search', () => {
+    renderFilteredProductsTable();
+  });
+  document.getElementById('pickupSearchReset')?.addEventListener('click', () => {
+    const search = document.getElementById('pickupProductSearch');
+    if (search) search.value = '';
+    renderFilteredProductsTable();
+  });
   document.querySelectorAll('[data-fulfillment-tab]').forEach((button) => button.addEventListener('click', async () => {
     state.ordersFulfillment = button.dataset.fulfillmentTab;
     document.querySelectorAll('[data-fulfillment-tab]').forEach((tab) => {
@@ -622,6 +633,62 @@ function renderCustomerInsights(customers) {
   `;
 }
 
+function formatCompactItemName(name) {
+  if (!name || typeof name !== 'string') return '';
+  const trimmed = name.trim();
+  const planMatch = trimmed.match(
+    /^(?:Tiffin\s*Plan\s*[-—–:]\s*)?(Full\s*Meal|Curry(?:-|\s*)Only)(?:\s+Package)?(?:\s*\(|\s*[-—–:]\s*)(Single|Couple|Family)\)?$/i
+  );
+  if (planMatch) {
+    const planType = /^curry/i.test(planMatch[1]) ? 'Curry-Only' : 'Full Meal';
+    const size = planMatch[2].charAt(0).toUpperCase() + planMatch[2].slice(1).toLowerCase();
+    return `${planType} — ${size}`;
+  }
+  const prefixMatch = trimmed.match(/^Tiffin\s*Plan\s*[-—–:]\s*(.+)$/i);
+  if (prefixMatch) {
+    return prefixMatch[1].trim();
+  }
+  return trimmed;
+}
+
+function isDeliveryTiffinOrder(order) {
+  if (!order) return false;
+  const items = Array.isArray(order.items) ? order.items : [];
+
+  const hasDeliveryItems = items.some((item) => (item.fulfillment || order.fulfillment) === 'delivery');
+  const isOrderDeliveryFulfillment = order.fulfillment === 'delivery' || order.fulfillment === 'mixed';
+  if (!hasDeliveryItems && !isOrderDeliveryFulfillment) {
+    return false;
+  }
+
+  if (items.length > 0 && items.every((i) => i.fulfillment === 'pickup')) {
+    return false;
+  }
+
+  const hasDeliveryPlanItem = items.some((item) => {
+    const isDelivery = (item.fulfillment || order.fulfillment) === 'delivery';
+    if (!isDelivery) return false;
+    const cat = String(item.category || '').toLowerCase();
+    const name = String(item.productName || '');
+    return cat === 'tiffin plans'
+      || cat === 'tiffin preparation'
+      || cat === 'tiffin'
+      || /^(?:Tiffin Plan\s*[-—–:]\s*)?(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(/i.test(name)
+      || /^(?:Full Meal|Curry(?:-|\s+)Only)\b/i.test(name);
+  });
+
+  if (hasDeliveryPlanItem) return true;
+
+  const hasTiffinTypeOrPlan = order.type === 'tiffin'
+    || Boolean(order.tiffinPlan?.packageType);
+
+  if (hasTiffinTypeOrPlan && (hasDeliveryItems || isOrderDeliveryFulfillment)) {
+    return true;
+  }
+
+  return false;
+}
+
 async function renderOrdersTable() {
   const params = parseFilters();
   params.set('fulfillment', state.ordersFulfillment || 'delivery');
@@ -658,7 +725,7 @@ async function renderOrdersTable() {
   const resultCount = document.getElementById('ordersResultCount');
   if (resultCount) resultCount.textContent = `${orders.length} ${orders.length === 1 ? 'order' : 'orders'} found`;
   const headers = state.ordersFulfillment === 'delivery'
-    ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Start Date', 'End Date', 'Delivery Member', 'Amount', 'Status']
+    ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Fulfillment', 'Start Date', 'End Date', 'Delivery Member', 'Amount', 'Status']
     : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Pickup Date', 'Status', 'Amount'];
 
   table.innerHTML = `
@@ -675,16 +742,30 @@ async function renderOrdersTable() {
           const customer = order.customerDoc || {};
           const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
           const canCancel = !order.firstDeliveredAt && !order.deliveredAt;
-          const isTiffinDelivery = order.type === 'tiffin' && items.some((item) => item.fulfillment === 'delivery');
+          const isTiffinDelivery = isDeliveryTiffinOrder(order);
+
+          const displayedItems = state.ordersFulfillment === 'pickup'
+            ? items.filter((item) => (item.fulfillment || 'pickup') === 'pickup')
+            : state.ordersFulfillment === 'delivery'
+            ? items.filter((item) => item.fulfillment === 'delivery')
+            : items;
+
+          const displayType = state.ordersFulfillment === 'pickup'
+            ? (order.type === 'tiffin' ? 'product' : (order.type || 'product'))
+            : (order.type === 'product' && items.some((i) => i.fulfillment === 'delivery') ? 'tiffin' : (order.type || 'tiffin'));
 
           if (state.ordersFulfillment === 'delivery' && isTiffinDelivery) {
-            const deliveryPlanItems = items.filter((item) => item.fulfillment === 'delivery');
-            const itemNames = deliveryPlanItems.map((item) => (
-              `${escHtml(item.productName || 'Tiffin Plan')} × ${Number(item.quantity) || 0}`
-            )).join('<br>');
+            const deliveryPlanItems = displayedItems;
+            const itemEntries = deliveryPlanItems.map((item) => {
+              const rawName = item.productName || 'Tiffin Plan';
+              const compact = formatCompactItemName(rawName);
+              const qty = Number(item.quantity) || 0;
+              return `<span class="order-item-entry" title="${escHtml(rawName)} × ${qty}">${escHtml(compact)} × ${qty}</span>`;
+            });
+            const itemNames = itemEntries.join('<br>');
             const itemDetails = itemNames || (
               order.tiffinPlan?.packageType
-                ? `${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'} Package`
+                ? `<span class="order-item-entry" title="${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'} Package${order.tiffinPlan.size ? ` (${order.tiffinPlan.size})` : ''}">${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'}${order.tiffinPlan.size ? ` — ${order.tiffinPlan.size[0].toUpperCase()}${order.tiffinPlan.size.slice(1).toLowerCase()}` : ' Package'}</span>`
                 : 'Tiffin Plan'
             );
             const tiffinStatus = String(order.status || 'PENDING').toUpperCase();
@@ -692,22 +773,27 @@ async function renderOrdersTable() {
             const endDate = order.subscriptionEndDate || order.createdAt;
             const rowState = getTiffinRowState(startDate, endDate);
             const amountEditor = renderOrderAmountEditor(order);
+            const startDateVal = startDate ? getDateInputValue(startDate) : '';
+            const endDateVal = endDate ? getDateInputValue(endDate) : '';
             return `
               <tr class="${rowState}" data-order-id="${order._id}">
                 <td>${escHtml(order.orderId)}</td>
                 <td><strong>${escHtml(customerName)}</strong></td>
                 <td>${escHtml(customer.phone || '—')}<br>${escHtml(customer.email || '—')}<br><strong>Address:</strong> ${escHtml(order.deliveryAddress || customer.address || customer.area || '—')}</td>
-                <td>${itemDetails}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Add Items</button></td>
-                <td>${order.type}</td>
+                <td class="order-item-cell">${itemDetails}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Add Items</button></td>
+                <td>${displayType}</td>
+                <td>Delivery</td>
                 <td>
                   <div class="tiffin-end-date-cell">
-                    <input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${startDate ? getDateInputValue(startDate) : ''}" />
-                      <button class="delivery-start-date-save" data-order-id="${order._id}">Save</button>
+                    <span class="saved-date">${startDateVal || '—'}</span>
+                    <input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${startDateVal}" />
+                    <button class="delivery-start-date-save" data-order-id="${order._id}">Save</button>
                   </div>
                 </td>
                 <td>
                   <div class="tiffin-end-date-cell">
-                    <input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${getDateInputValue(endDate)}" />
+                    <span class="saved-date">${endDateVal || '—'}</span>
+                    <input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${endDateVal}" />
                     <button class="delivery-end-date-save" data-order-id="${order._id}">Save</button>
                   </div>
                 </td>
@@ -727,7 +813,13 @@ async function renderOrdersTable() {
             `;
           }
 
-          const itemDetails = items.map((it) => `${escHtml(it.productName)} × ${Number(it.quantity) || 0} — ${currency(it.priceAtPurchase)} each; ${currency(it.subtotal)} (${it.fulfillment === 'delivery' ? 'Delivery' : 'Pickup'})`).join('<br>');
+          const itemEntries = displayedItems.map((it) => {
+            const rawName = it.productName || 'Product';
+            const compact = formatCompactItemName(rawName);
+            const qty = Number(it.quantity) || 0;
+            return `<span class="order-item-entry" title="${escHtml(rawName)} × ${qty}">${escHtml(compact)} × ${qty}</span>`;
+          });
+          const itemDetails = itemEntries.join('<br>');
           const orderDetails = [itemDetails, order.customRequest ? `Custom request: ${order.customRequest}` : ''].filter(Boolean).join('<br>') || '—';
           const savedLocation = order.deliveryAddress || customer.address || customer.area || '—';
           const deliveryAddress = state.ordersFulfillment === 'delivery'
@@ -742,17 +834,20 @@ async function renderOrdersTable() {
               <option value="">Unassigned</option>
               ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${escHtml(member.name)}</option>`).join('')}
             </select></td>` : '';
+          const pickupDateVal = order.pickupDate ? getDateInputValue(order.pickupDate) : '';
+          const deliveryStartDateVal = order.subscriptionStartDate ? getDateInputValue(order.subscriptionStartDate) : '';
+          const deliveryEndDateVal = order.subscriptionEndDate ? getDateInputValue(order.subscriptionEndDate) : '';
           return `
           <tr>
             <td>${escHtml(order.orderId)}</td>
             ${state.ordersFulfillment === 'delivery'
               ? `<td><strong>${escapedCustomerName}</strong></td><td>${escapedPhone}<br>${escapedEmail}${deliveryAddress}</td>`
               : `<td><strong>${escapedCustomerName}</strong><br>${escapedPhone}<br>${escapedEmail}${deliveryAddress}</td>`}
-            <td>${orderDetails}</td>
-            <td>${order.type}</td>
+            <td class="order-item-cell">${orderDetails}</td>
+            <td>${displayType}</td>
             ${state.ordersFulfillment === 'delivery'
-              ? `<td><div class="tiffin-end-date-cell"><input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${order.subscriptionStartDate ? getDateInputValue(order.subscriptionStartDate) : ''}" /><button class="delivery-start-date-save" data-order-id="${order._id}">Save</button></div></td><td><div class="tiffin-end-date-cell"><input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${order.subscriptionEndDate ? getDateInputValue(order.subscriptionEndDate) : ''}" /><button class="delivery-end-date-save" data-order-id="${order._id}">Save</button></div></td>${deliveryAssignment}<td>${renderOrderAmountEditor(order)}</td>`
-              : `<td>Pickup</td><td>${orderDateTime}</td><td><div class="tiffin-end-date-cell pickup-date-editor" data-order-id="${order._id}"><input type="date" class="pickup-date-input" data-order-id="${order._id}" value="${order.pickupDate ? getDateInputValue(order.pickupDate) : ''}" /><button type="button" class="pickup-date-save" data-order-id="${order._id}">Save</button></div></td>`}
+              ? `<td>Delivery</td><td><div class="tiffin-end-date-cell"><span class="saved-date">${deliveryStartDateVal || '—'}</span><input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${deliveryStartDateVal}" /><button class="delivery-start-date-save" data-order-id="${order._id}">Save</button></div></td><td><div class="tiffin-end-date-cell"><span class="saved-date">${deliveryEndDateVal || '—'}</span><input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${deliveryEndDateVal}" /><button class="delivery-end-date-save" data-order-id="${order._id}">Save</button></div></td>${deliveryAssignment}<td>${renderOrderAmountEditor(order)}</td>`
+              : `<td>Pickup</td><td>${orderDateTime}</td><td><div class="tiffin-end-date-cell pickup-date-editor" data-order-id="${order._id}"><span class="saved-date">${pickupDateVal || '—'}</span><input type="date" class="pickup-date-input" data-order-id="${order._id}" value="${pickupDateVal}" /><button type="button" class="pickup-date-save" data-order-id="${order._id}">Save</button></div></td>`}
             <td>
               ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}" ${['DELIVERED', 'CANCELLED'].includes(String(order.status).toUpperCase()) ? 'disabled' : ''}>
                 ${renderDeliveryStatusOptions(order.status, true, canCancel)}
@@ -761,7 +856,7 @@ async function renderOrdersTable() {
             ${state.ordersFulfillment === 'pickup' ? `<td>${renderOrderAmountEditor(order)}</td>` : ''}
           </tr>
         `;
-        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 10 : 9}">No ${state.ordersFulfillment} orders match the selected filters.</td></tr>`}
+        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 11 : 9}">No ${state.ordersFulfillment} orders match the selected filters.</td></tr>`}
       </tbody>
     </table>
   `;
@@ -786,7 +881,7 @@ async function renderOrdersTable() {
     try {
       await api(`/orders/${button.dataset.orderId}/amount`, {
         method: 'PUT',
-        body: JSON.stringify({ amount })
+        body: JSON.stringify({ amount, fulfillment: state.ordersFulfillment })
       });
       showAdminToast('Order amount saved successfully.');
       await loadDashboardData();
@@ -902,7 +997,7 @@ async function renderOrdersTable() {
 }
 
 function renderOrderAmountEditor(order) {
-  const amount = Number(order.orderAmount ?? order.totalAmount ?? order.tiffinPlan?.price ?? 0);
+  const amount = Number(order.totalAmount ?? order.orderAmount ?? order.tiffinPlan?.price ?? 0);
   return `
     <div class="order-amount-editor">
       <span>${currency(amount)}</span>
@@ -1061,9 +1156,7 @@ async function openTiffinItemsEditor(orderId) {
     api('/delivery-plans')
   ]);
   const order = orderResponse.order;
-  const isDeliveryTiffin = order?.type === 'tiffin'
-    && (order.items || []).some((item) => item.fulfillment === 'delivery')
-    && !(order.items || []).some((item) => item.fulfillment === 'pickup');
+  const isDeliveryTiffin = isDeliveryTiffinOrder(order);
   if (!isDeliveryTiffin) throw new Error('Only delivery tiffin orders can edit preparation items.');
 
   tiffinEditorOrder = order;
@@ -1084,9 +1177,13 @@ async function openTiffinItemsEditor(orderId) {
 
   const customer = order.customer || {};
   const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
-  const planItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
-  const packageSummary = planItems.length
-    ? planItems.map((item) => `${item.productName} × ${Number(item.quantity) || 0}`).join(', ')
+  const planItems = (order.items || []).filter((item) => (item.fulfillment || order.fulfillment) === 'delivery' && (
+    item.category === 'Tiffin Plans' ||
+    /^(?:Tiffin Plan\s*[-—–:]\s*)?(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(/i.test(item.productName)
+  ));
+  const displayPlanItems = planItems.length ? planItems : (order.items || []).filter((item) => (item.fulfillment || order.fulfillment) === 'delivery');
+  const packageSummary = displayPlanItems.length
+    ? displayPlanItems.map((item) => `${item.productName} × ${Number(item.quantity) || 0}`).join(', ')
     : order.tiffinPlan?.packageType
       ? `${order.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal'} Package${order.tiffinPlan.size ? ` — ${order.tiffinPlan.size[0].toUpperCase()}${order.tiffinPlan.size.slice(1)}` : ''}`
       : 'Tiffin Package';
@@ -1601,9 +1698,38 @@ function displayProductCategory(category) {
   return /^tiffin$/i.test(value) || /^breakfast$/i.test(value) ? 'Breakfast' : value;
 }
 
+function getPickupProductSearchQuery() {
+  const input = document.getElementById('pickupProductSearch');
+  return (input ? input.value : '').trim().toLowerCase();
+}
+
+function matchesPickupSearch(product, rawQuery) {
+  const query = String(rawQuery || '').trim().toLowerCase();
+  if (!query) return true;
+  if (!product) return false;
+
+  const name = String(product.name || '').toLowerCase();
+  const description = String(product.description || '').toLowerCase();
+  const rawCategory = String(product.category || '').toLowerCase();
+  const displayedCategory = String(displayProductCategory(product.category) || '').toLowerCase();
+
+  return name.includes(query) ||
+    description.includes(query) ||
+    rawCategory.includes(query) ||
+    displayedCategory.includes(query);
+}
+
+function filterPickupProducts(products, query) {
+  if (!Array.isArray(products)) return [];
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return [...products];
+  return products.filter((p) => matchesPickupSearch(p, trimmed));
+}
+
 async function renderProductsTable() {
   const data = await api('/products/all');
   const products = data.products || [];
+  state.products = products;
 
   // Populate the categories datalist in the edit modal with all unique categories
   // so the admin gets autocomplete suggestions when editing.
@@ -1613,7 +1739,21 @@ async function renderProductsTable() {
     datalist.innerHTML = cats.map((c) => `<option value="${c}"></option>`).join('');
   }
 
+  renderFilteredProductsTable();
+}
+
+function renderFilteredProductsTable() {
   const table = document.getElementById('productsTable');
+  if (!table) return;
+
+  const allProducts = state.products || [];
+  const query = getPickupProductSearchQuery();
+  const products = filterPickupProducts(allProducts, query);
+
+  const emptyMessage = query
+    ? 'No matching pickup products found'
+    : 'No products found';
+
   table.innerHTML = `
     <table>
       <thead><tr>
@@ -1638,7 +1778,7 @@ async function renderProductsTable() {
                       data-product-id="${product._id}">Delete</button>
             </td>
           </tr>
-        `).join('') || '<tr><td colspan="6">No products found</td></tr>'}
+        `).join('') || `<tr><td colspan="6" class="table-empty-message">${escHtml(emptyMessage)}</td></tr>`}
       </tbody>
     </table>
   `;
@@ -1657,7 +1797,7 @@ async function renderProductsTable() {
   // Edit — open modal pre-filled with product data
   table.querySelectorAll('.edit-btn').forEach((button) => button.addEventListener('click', () => {
     const id = button.dataset.productId;
-    const product = products.find((p) => String(p._id) === id);
+    const product = allProducts.find((p) => String(p._id) === id);
     if (!product) return;
     openEditModal(product);
   }));
@@ -1665,7 +1805,7 @@ async function renderProductsTable() {
   // Delete — confirm then call DELETE /api/products/:id
   table.querySelectorAll('.delete-btn').forEach((button) => button.addEventListener('click', async () => {
     const id = button.dataset.productId;
-    const product = products.find((p) => String(p._id) === id);
+    const product = allProducts.find((p) => String(p._id) === id);
     if (!product) return;
     if (!confirm(`Delete "${product.name}"?\n\nThis cannot be undone.`)) return;
     try {
@@ -3038,4 +3178,18 @@ if (changePasswordForm) {
       );
     }
   });
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    formatCompactItemName,
+    matchesPickupSearch,
+    filterPickupProducts,
+    displayProductCategory,
+    state,
+    renderOrdersTable,
+    renderOrderAmountEditor,
+    isDeliveryTiffinOrder,
+    openTiffinItemsEditor
+  };
 }

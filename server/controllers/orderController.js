@@ -327,26 +327,45 @@ async function createOrder(req, res) {
 }
 
 async function createManualOrder(req, res) {
-  const { firstName, lastName, phone, email, productId, quantity, amount, fulfillment, address = '', pickupDate: pickupDateValue } = req.body || {};
+  const {
+    firstName, lastName, phone, email,
+    items: rawItems,
+    amount, fulfillment, address = '', pickupDate: pickupDateValue
+  } = req.body || {};
+
   const cleanFirstName = String(firstName || '').trim();
   const cleanLastName = String(lastName || '').trim();
   const cleanPhone = String(phone || '').trim();
   const cleanEmail = String(email || '').trim().toLowerCase();
-  const cleanFulfillment = String(fulfillment || '').toLowerCase();
-  const parsedQuantity = Number(quantity);
   const parsedAmount = Number(amount);
 
+  // ── Customer validation ───────────────────────────────────────────────────
   if (!cleanFirstName || !cleanLastName || !cleanPhone || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
     return res.status(400).json({ message: 'First name, last name, phone and a valid email are required.' });
   }
-  if (!mongoose.isValidObjectId(productId)) return res.status(400).json({ message: 'Select a valid product.' });
-  if (!Number.isInteger(parsedQuantity) || parsedQuantity < 1 || parsedQuantity > 99) {
-    return res.status(400).json({ message: 'Quantity must be between 1 and 99.' });
+  if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+    return res.status(400).json({ message: 'Enter a valid non-negative amount.' });
   }
-  if (!Number.isFinite(parsedAmount) || parsedAmount < 0) return res.status(400).json({ message: 'Enter a valid non-negative amount.' });
-  if (!['delivery', 'pickup'].includes(cleanFulfillment)) {
-    return res.status(400).json({ message: 'Fulfillment must be delivery or pickup.' });
+
+  // ── Items validation ──────────────────────────────────────────────────────
+  const itemsInput = Array.isArray(rawItems) ? rawItems : [];
+  if (!itemsInput.length) {
+    return res.status(400).json({ message: 'At least one item is required.' });
   }
+  if (itemsInput.length > 50) {
+    return res.status(400).json({ message: 'An order can contain at most 50 items.' });
+  }
+  for (const item of itemsInput) {
+    const qty = parseInt(item?.quantity, 10);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 99) {
+      return res.status(400).json({ message: 'Each item quantity must be between 1 and 99.' });
+    }
+    if (!item?.productName || !String(item.productName).trim()) {
+      return res.status(400).json({ message: 'Each item must have a product name.' });
+    }
+  }
+
+  // ── Date validation ───────────────────────────────────────────────────────
   if (!String(pickupDateValue || '').trim()) {
     return res.status(400).json({ message: 'Pickup date is required for every order.' });
   }
@@ -355,35 +374,102 @@ async function createManualOrder(req, res) {
     return res.status(400).json({ message: 'Pickup date must be a valid date on or after today.' });
   }
   const pickupDate = selectedOrderDate;
-  const subscriptionDates = cleanFulfillment === 'delivery'
-    ? getSubscriptionServiceDates(selectedOrderDate)
-    : null;
-  const product = await Product.findOne({ _id: productId, active: true }).lean();
-  if (!product) return res.status(400).json({ message: 'Select an active catalog product.' });
-  if (product.stock < parsedQuantity) {
-    return res.status(400).json({ message: `Insufficient stock for ${product.name}. Available: ${product.stock}, requested: ${parsedQuantity}.` });
+
+  // ── Build order items: stock-check and decrement pickup products ──────────
+  const orderItems = [];
+  const stockChanges = new Map(); // productId -> quantity decremented (for rollback)
+
+  try {
+    for (const raw of itemsInput) {
+      const qty = parseInt(raw.quantity, 10);
+      const itemFulfillment = String(raw.fulfillment || '').toLowerCase() === 'pickup' ? 'pickup' : 'delivery';
+      const rawProductId = raw.productId && /^[a-fA-F0-9]{24}$/.test(String(raw.productId))
+        ? String(raw.productId) : null;
+
+      if (rawProductId && itemFulfillment === 'pickup') {
+        // Pickup product — validate stock and decrement
+        const product = await Product.findOneAndUpdate(
+          { _id: rawProductId, active: true, stock: { $gte: qty } },
+          { $inc: { stock: -qty } },
+          { new: true }
+        ).lean();
+        if (!product) {
+          const existing = await Product.findById(rawProductId).lean();
+          if (!existing || !existing.active) {
+            throw new Error(`Product "${raw.productName}" is no longer available.`);
+          }
+          throw new Error(`Insufficient stock for ${existing.name}. Available: ${existing.stock}, requested: ${qty}.`);
+        }
+        stockChanges.set(rawProductId, (stockChanges.get(rawProductId) || 0) + qty);
+        orderItems.push({
+          productId: product._id,
+          productName: product.name,
+          category: product.category || 'General',
+          fulfillment: 'pickup',
+          deliveryStatus: 'PENDING',
+          priceAtPurchase: Number(raw.priceAtPurchase) || product.price,
+          quantity: qty,
+          subtotal: Math.round((Number(raw.priceAtPurchase) || product.price) * qty * 100) / 100,
+          preparationType: raw.preparationType || undefined,
+          itemKey: raw.itemKey || undefined,
+          size: raw.size || undefined
+        });
+      } else {
+        // Delivery/tiffin item — no stock check
+        orderItems.push({
+          productId: null,
+          productName: String(raw.productName).trim(),
+          category: String(raw.category || 'Tiffin Preparation').trim(),
+          fulfillment: 'delivery',
+          deliveryStatus: 'PENDING',
+          priceAtPurchase: Number(raw.priceAtPurchase) || 0,
+          quantity: qty,
+          subtotal: Math.round((Number(raw.priceAtPurchase) || 0) * qty * 100) / 100,
+          preparationType: raw.preparationType || undefined,
+          itemKey: raw.itemKey || undefined,
+          size: raw.size || undefined
+        });
+      }
+    }
+  } catch (error) {
+    // Roll back any stock already decremented
+    for (const [productId, qty] of stockChanges) {
+      await Product.updateOne({ _id: productId }, { $inc: { stock: qty } });
+    }
+    return res.status(400).json({ message: error.message || 'Could not validate order items.' });
   }
 
+  // ── Determine order-level fulfillment and subscription dates ─────────────
+  const hasDelivery = orderItems.some((item) => item.fulfillment === 'delivery');
+  const hasPickup = orderItems.some((item) => item.fulfillment === 'pickup');
+  const orderFulfillment = hasDelivery && hasPickup ? 'mixed' : hasDelivery ? 'delivery' : 'pickup';
+  const subscriptionDates = hasDelivery ? getSubscriptionServiceDates(selectedOrderDate) : null;
+
+  // ── Upsert customer ───────────────────────────────────────────────────────
   let customer;
   try {
     customer = await Customer.findOneAndUpdate(
       { email: cleanEmail, phone: cleanPhone },
-      { $setOnInsert: { firstName: cleanFirstName, lastName: cleanLastName, phone: cleanPhone, email: cleanEmail, address: String(address).trim() } },
+      {
+        $setOnInsert: {
+          firstName: cleanFirstName, lastName: cleanLastName,
+          phone: cleanPhone, email: cleanEmail,
+          address: String(address).trim()
+        }
+      },
       { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
     );
   } catch (error) {
+    // Roll back stock on customer upsert failure
+    for (const [productId, qty] of stockChanges) {
+      await Product.updateOne({ _id: productId }, { $inc: { stock: qty } });
+    }
     if (error.code !== 11000) throw error;
     customer = await Customer.findOne({ email: cleanEmail, phone: cleanPhone });
     if (!customer) throw error;
   }
 
-  const updatedProduct = await Product.findOneAndUpdate(
-    { _id: product._id, active: true, stock: { $gte: parsedQuantity } },
-    { $inc: { stock: -parsedQuantity } },
-    { new: true }
-  ).lean();
-  if (!updatedProduct) return res.status(400).json({ message: `Insufficient stock for ${product.name}.` });
-
+  // ── Create order ──────────────────────────────────────────────────────────
   const roundedAmount = Math.round(parsedAmount * 100) / 100;
   let order;
   try {
@@ -398,33 +484,34 @@ async function createManualOrder(req, res) {
         address: String(address || customer.address || customer.area || '').trim(),
         area: customer.area || ''
       },
-      items: [{
-        productId: product._id,
-        productName: product.name,
-        category: product.category,
-        fulfillment: cleanFulfillment,
-        deliveryStatus: 'PENDING',
-        priceAtPurchase: Math.round((roundedAmount / parsedQuantity) * 100) / 100,
-        quantity: parsedQuantity,
-        subtotal: roundedAmount
-      }],
-      fulfillment: cleanFulfillment,
+      items: orderItems,
+      fulfillment: orderFulfillment,
       type: 'product',
       totalAmount: roundedAmount,
       pickupDate,
       subscriptionStartDate: subscriptionDates?.startDate || null,
       subscriptionEndDate: subscriptionDates?.endDate || null,
-      deliveryStatusDate: subscriptionDates?.serviceDates[0] || null,
+      deliveryStatusDate: subscriptionDates?.serviceDates?.[0] || null,
       deliveryAddress: String(address || customer.address || customer.area || '').trim(),
       status: 'PENDING',
       placedAt: new Date()
     });
   } catch (error) {
-    await Product.updateOne({ _id: product._id }, { $inc: { stock: parsedQuantity } });
+    // Roll back stock on order creation failure
+    for (const [productId, qty] of stockChanges) {
+      await Product.updateOne({ _id: productId }, { $inc: { stock: qty } });
+    }
     throw error;
   }
 
-  req.app.get('io')?.emit('product:stockUpdated', { productId: updatedProduct._id, stock: updatedProduct.stock, product: updatedProduct });
+  // ── Emit socket events for stock updates ─────────────────────────────────
+  for (const [productId] of stockChanges) {
+    const updatedProduct = await Product.findById(productId).lean();
+    if (updatedProduct) {
+      req.app.get('io')?.emit('product:stockUpdated', { productId: updatedProduct._id, stock: updatedProduct.stock, product: updatedProduct });
+    }
+  }
+
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
   emitOrderUpdate(req.app, populated);
   const responseOrder = populated.toObject();

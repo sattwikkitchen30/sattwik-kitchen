@@ -171,10 +171,20 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
     });
     const dateLabel = document.getElementById('ordersDateLabel');
     if (dateLabel) dateLabel.textContent = state.ordersFulfillment === 'delivery' ? 'Delivery start date' : 'Pickup date';
+    // Show/hide the appropriate Add Order button
+    const deliveryBtn = document.getElementById('addDeliveryOrderBtn');
+    const pickupBtn = document.getElementById('addPickupOrderBtn');
+    if (deliveryBtn) deliveryBtn.hidden = state.ordersFulfillment !== 'delivery';
+    if (pickupBtn) pickupBtn.hidden = state.ordersFulfillment !== 'pickup';
     await renderOrdersTable();
   }));
   const dateLabel = document.getElementById('ordersDateLabel');
   if (dateLabel) dateLabel.textContent = state.ordersFulfillment === 'delivery' ? 'Delivery start date' : 'Pickup date';
+  // Initialise button visibility to match initial tab (delivery)
+  const deliveryBtnInit = document.getElementById('addDeliveryOrderBtn');
+  const pickupBtnInit = document.getElementById('addPickupOrderBtn');
+  if (deliveryBtnInit) deliveryBtnInit.hidden = state.ordersFulfillment !== 'delivery';
+  if (pickupBtnInit) pickupBtnInit.hidden = state.ordersFulfillment !== 'pickup';
 
 }
 
@@ -1590,11 +1600,23 @@ document.getElementById('tiffinItemsSaveBtn')?.addEventListener('click', async (
   }
 });
 
+// ─── Add Order modal DOM references ──────────────────────────────────────────
 const manualOrderModal = document.getElementById('manualOrderModal');
 const manualOrderForm = document.getElementById('manualOrderForm');
 const manualPickupDateField = document.getElementById('manualPickupDateField');
 const manualPickupDate = document.getElementById('manualPickupDate');
-let manualOrderProducts = [];
+
+// ─── Add Order modal state (parallel to tiffinEditor, reusing same catalog helpers) ─
+let manualOrderMode = 'delivery';    // 'delivery' | 'pickup' — set when modal opens
+let manualOrderItemRowSeq = 0;
+let manualOrderItems = [];       // confirmed item rows (like tiffinEditorItems)
+let manualOrderItemRows = [];    // in-progress add rows (like tiffinEditorAdditionalRows)
+let manualOrderCatalog = [];     // delivery catalog (loaded on open, same as tiffin editor)
+let manualOrderProducts = [];    // pickup catalog products (for amount auto-calc)
+
+function createEmptyManualItemRow() {
+  return { id: ++manualOrderItemRowSeq, itemKey: '', customName: '', size: '', quantity: '1', isCustom: false };
+}
 
 function closeManualOrderModal() {
   if (!manualOrderModal || !manualOrderForm) return;
@@ -1602,41 +1624,403 @@ function closeManualOrderModal() {
   manualOrderModal.setAttribute('aria-hidden', 'true');
   manualOrderForm.reset();
   document.getElementById('manualOrderMessage').textContent = '';
+  manualOrderItems = [];
+  manualOrderItemRows = [];
+  manualOrderCatalog = [];
+  manualOrderProducts = [];
 }
 
-document.getElementById('addManualOrderBtn')?.addEventListener('click', async () => {
+// Render the confirmed item list (same pattern as renderTiffinEditorItems)
+function renderManualOrderItems() {
+  const list = document.getElementById('manualOrderItemsList');
+  if (!list) return;
+  list.innerHTML = manualOrderItems.length
+    ? manualOrderItems.map((item, index) => `
+      <div class="tiffin-item-row">
+        <strong>${escHtml(item.productName)}</strong>
+        <button type="button" class="tiffin-item-step" data-manual-item-index="${index}" data-step="-1" aria-label="Decrease ${escHtml(item.productName)} quantity">−</button>
+        <input class="tiffin-item-quantity" type="number" min="1" step="1" value="${Number(item.quantity)}" data-manual-item-index="${index}" aria-label="${escHtml(item.productName)} quantity" />
+        <button type="button" class="tiffin-item-step" data-manual-item-index="${index}" data-step="1" aria-label="Increase ${escHtml(item.productName)} quantity">+</button>
+        <button type="button" class="tiffin-item-remove" data-manual-item-index="${index}">Remove</button>
+      </div>
+    `).join('')
+    : '<p class="muted">No items added yet.</p>';
+  updateManualOrderAmount();
+}
+
+// Render the add-item rows (same pattern as renderTiffinAddItemRows)
+function renderManualAddItemRows() {
+  const container = document.getElementById('manualAddItemRows');
+  if (!container) return;
+  container.innerHTML = manualOrderItemRows.map((row) => {
+    const catalogItem = manualOrderCatalog.find((c) => c.key === row.itemKey) || null;
+    const sizeDisabled = !row.isCustom && !catalogItem?.supportsSize;
+
+    let sizeOptions = '<option value="">—</option>';
+    if (row.isCustom) {
+      sizeOptions = `
+        <option value="">— (No size)</option>
+        <option value="small" ${row.size === 'small' ? 'selected' : ''}>Small</option>
+        <option value="medium" ${row.size === 'medium' ? 'selected' : ''}>Medium</option>
+        <option value="large" ${row.size === 'large' ? 'selected' : ''}>Large</option>
+      `;
+    } else if (catalogItem?.supportsSize) {
+      const validSize = catalogItem.sizes.includes(row.size) ? row.size : '';
+      sizeOptions = `<option value="">Select size</option>${catalogItem.sizes.map((s) => (
+        `<option value="${s}" ${validSize === s ? 'selected' : ''}>${TIFFIN_SIZE_LABELS[s] || s}</option>`
+      )).join('')}`;
+    }
+
+    // Build the item select differently per mode
+    let itemSelectOptions;
+    if (manualOrderMode === 'pickup') {
+      // Pickup mode: only show pickup products — no delivery items, no custom
+      const pickupOptions = manualOrderProducts.map((p) => (
+        `<option value="product:${p._id}" ${row.itemKey === `product:${p._id}` ? 'selected' : ''} ${p.stock === 0 ? 'disabled' : ''}>${escHtml(p.name)} (${currency(p.price)}${p.stock === 0 ? ', out of stock' : ''})</option>`
+      )).join('');
+      itemSelectOptions = `
+        <option value="">Select pickup product</option>
+        ${pickupOptions}
+      `;
+    } else {
+      // Delivery mode: only show delivery catalog items + custom item option
+      const selectedItemOptions = manualOrderCatalog.map((item) => (
+        `<option value="${escHtml(item.key)}" ${!row.isCustom && item.key === row.itemKey ? 'selected' : ''}>${escHtml(item.name)}</option>`
+      )).join('');
+      itemSelectOptions = `
+        <option value="">Select delivery item</option>
+        ${selectedItemOptions}
+        <option value="__custom__" ${row.isCustom ? 'selected' : ''}>+ Add custom item</option>
+      `;
+    }
+
+    return `
+      <div class="tiffin-add-item-row" data-manual-row-id="${row.id}" role="row">
+        <label class="tiffin-add-item-select-col">
+          <span class="visually-hidden">Item</span>
+          <select class="manual-add-item-select" data-manual-row-id="${row.id}" aria-label="Select item">
+            ${itemSelectOptions}
+          </select>
+          ${row.isCustom ? `
+            <input class="manual-add-item-custom-name" type="text" data-manual-row-id="${row.id}" placeholder="Custom item name" value="${escHtml(row.customName || '')}" aria-label="Custom item name" style="margin-top:4px;" />
+          ` : ''}
+        </label>
+        <div class="manual-add-item-size-col">
+          <label>
+            <span class="visually-hidden">Size</span>
+            <select class="manual-add-item-size" data-manual-row-id="${row.id}" aria-label="Size" ${sizeDisabled ? 'disabled' : ''}>
+              ${sizeOptions}
+            </select>
+          </label>
+        </div>
+        <label>
+          <span class="visually-hidden">Quantity</span>
+          <input class="manual-add-item-quantity" type="number" min="1" step="1" value="${escHtml(row.quantity)}" data-manual-row-id="${row.id}" aria-label="Quantity" />
+        </label>
+        <div class="tiffin-add-item-actions">
+          <button type="button" class="btn btn-secondary btn-sm tiffin-add-item-add manual-add-item-add" data-manual-row-id="${row.id}">Add</button>
+          <button type="button" class="tiffin-item-remove manual-add-item-remove" data-manual-row-id="${row.id}">Remove</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Auto-calculate amount from confirmed items (reuses product prices + tiffin item subtotals)
+function updateManualOrderAmount() {
   const fulfillment = state.ordersFulfillment || 'delivery';
-  document.getElementById('manualOrderTitle').textContent = `Add ${fulfillment === 'delivery' ? 'Delivery' : 'Pickup'} Order`;
-  document.getElementById('manualOrderFulfillment').textContent = `${fulfillment === 'delivery' ? 'Delivery' : 'Pickup'} order`;
-  document.getElementById('manualAddressLabel').hidden = fulfillment !== 'delivery';
+  let total = 0;
+  for (const item of manualOrderItems) {
+    if (item.productId) {
+      // Pickup product: use priceAtPurchase * quantity
+      const price = Number(item.priceAtPurchase) || 0;
+      total += price * Number(item.quantity || 1);
+    } else if (item.catalogPrice) {
+      total += Number(item.catalogPrice) * Number(item.quantity || 1);
+    }
+    // Tiffin preparation items have no direct price — admin sets the Amount field manually
+  }
+  const amountField = document.getElementById('manualAmount');
+  // Only auto-populate if we have priced items; otherwise let admin fill it
+  if (amountField && total > 0) {
+    amountField.value = total.toFixed(2);
+  }
+}
+
+// Merge an add-row into the confirmed list (same logic as mergeAddItemRow for tiffin editor,
+// but also supports pickup products by productId)
+function mergeManualAddItemRow(rowId) {
+  const row = manualOrderItemRows.find((r) => r.id === rowId);
+  if (!row) return false;
+  const message = document.getElementById('manualOrderMessage');
+
+  const quantity = Number(row.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    message.textContent = 'Quantity must be a positive whole number.';
+    return false;
+  }
+
+  let resolved = null;
+
+  // Pickup product selected via "product:<id>" key
+  if (!row.isCustom && row.itemKey && row.itemKey.startsWith('product:')) {
+    const productId = row.itemKey.slice('product:'.length);
+    const product = manualOrderProducts.find((p) => String(p._id) === productId);
+    if (!product) { message.textContent = 'Selected product not found.'; return false; }
+    if (product.stock === 0) { message.textContent = `${product.name} is out of stock.`; return false; }
+    resolved = {
+      productId: product._id,
+      productName: product.name,
+      category: product.category || 'General',
+      fulfillment: 'pickup',
+      priceAtPurchase: Number(product.price),
+      itemKey: `product:${product._id}`,
+      size: null,
+      quantity,
+      isAdditional: false
+    };
+  } else if (row.isCustom) {
+    // Custom item — same logic as tiffin editor
+    const rawName = String(row.customName || '').trim();
+    if (!rawName || rawName === '+ Add custom item' || rawName === '__custom__') {
+      message.textContent = 'Enter a valid custom item name.';
+      return false;
+    }
+    const size = parseDeliverySizeToken(row.size);
+    const sizeLabel = size ? (TIFFIN_SIZE_LABELS[size] || (size[0].toUpperCase() + size.slice(1))) : '';
+    const alreadyHasSize = sizeLabel && new RegExp(`^${sizeLabel}\\b`, 'i').test(rawName);
+    const productName = sizeLabel && !alreadyHasSize ? `${sizeLabel} ${rawName}` : rawName;
+    const key = normalizeDeliveryItemKey(rawName);
+    const prepFactory = TIFFIN_PREP_FROM_ITEM[key];
+    const prepType = prepFactory ? (size ? prepFactory(size) : prepFactory()) : null;
+    resolved = {
+      productId: null,
+      productName,
+      category: 'Tiffin Preparation',
+      fulfillment: 'delivery',
+      preparationType: prepType || key,
+      itemKey: key,
+      size: size || null,
+      quantity,
+      isAdditional: true
+    };
+  } else {
+    // Delivery catalog item — same logic as tiffin editor
+    if (!row.itemKey) { message.textContent = 'Choose an item from the list.'; return false; }
+    const catalogItem = manualOrderCatalog.find((c) => c.key === row.itemKey);
+    if (!catalogItem) { message.textContent = 'Choose an item from the list.'; return false; }
+    const size = catalogItem.supportsSize ? row.size : '';
+    if (catalogItem.supportsSize && !catalogItem.sizes.includes(size)) {
+      message.textContent = `Choose a valid size for ${catalogItem.name}.`;
+      return false;
+    }
+    const prepFactory = TIFFIN_PREP_FROM_ITEM[catalogItem.key];
+    const preparationType = prepFactory
+      ? (catalogItem.supportsSize ? prepFactory(size) : prepFactory())
+      : catalogItem.key;
+    const component = preparationType && TIFFIN_PREP_TO_ROW[preparationType]
+      ? {
+          smallDal: 'Small Dal', mediumDal: 'Medium Dal', largeDal: 'Large Dal',
+          smallCurry: 'Small Curry', mediumCurry: 'Medium Curry', largeCurry: 'Large Curry',
+          smallCurd: 'Small Curd', bigCurd: 'Big Curd', chapathi: 'Chapathi', riceBox: 'Rice Box'
+        }[preparationType]
+      : null;
+    const productName = component || (catalogItem.supportsSize && size ? `${TIFFIN_SIZE_LABELS[size] || size} ${catalogItem.name}` : catalogItem.name);
+    resolved = {
+      productId: null,
+      productName,
+      category: 'Tiffin Preparation',
+      fulfillment: 'delivery',
+      preparationType: preparationType || undefined,
+      itemKey: catalogItem.key,
+      size: size || null,
+      quantity,
+      isAdditional: true
+    };
+  }
+
+  // Merge or append — same identity logic as tiffin editor
+  const identity = getCanonicalIdentity(resolved);
+  const existing = manualOrderItems.find((item) => getCanonicalIdentity(item) === identity);
+  if (existing) {
+    existing.quantity = Number(existing.quantity) + quantity;
+  } else {
+    manualOrderItems.push({ ...resolved, originalQuantity: 0, additionalQuantity: quantity });
+  }
+
+  // Reset the row
+  row.itemKey = '';
+  row.customName = '';
+  row.size = '';
+  row.quantity = '1';
+  row.isCustom = false;
+  message.textContent = '';
+  renderManualOrderItems();
+  renderManualAddItemRows();
+  return true;
+}
+
+
+// ── Shared helper: open the manual order modal in a given mode ────────────────
+function openManualOrderModal(fulfillment) {
+  manualOrderMode = fulfillment === 'pickup' ? 'pickup' : 'delivery';
+  const isPickup = manualOrderMode === 'pickup';
+  document.getElementById('manualOrderTitle').textContent = isPickup ? 'Add Pickup Order' : 'Add Delivery Order';
+  document.getElementById('manualOrderFulfillment').textContent = isPickup ? 'Pickup order' : 'Delivery order';
+  document.getElementById('manualAddressLabel').hidden = isPickup;
   manualPickupDateField.hidden = false;
   manualPickupDate.required = true;
   manualPickupDate.min = getLocalDateString();
+
+  // Apply / remove pickup-mode class so CSS toggles the Size column
+  const addItemsTable = document.getElementById('manualAddItemsTable');
+  if (addItemsTable) addItemsTable.classList.toggle('pickup-mode', isPickup);
+
+  // Reset state
+  manualOrderItems = [];
+  manualOrderItemRows = [createEmptyManualItemRow()];
+  manualOrderCatalog = [];
+  manualOrderProducts = [];
+  document.getElementById('manualAmount').value = '';
+  document.getElementById('manualOrderMessage').textContent = '';
+}
+
+// ── Add Delivery Order ────────────────────────────────────────────────────────
+document.getElementById('addDeliveryOrderBtn')?.addEventListener('click', async () => {
+  openManualOrderModal('delivery');
   try {
-    const data = await api('/products/all');
-    manualOrderProducts = (data.products || []).filter((product) => product.active !== false);
-    const select = document.getElementById('manualProduct');
-    select.innerHTML = '<option value="">Select a product</option>' + manualOrderProducts.map((product) =>
-      `<option value="${product._id}" ${product.stock === 0 ? 'disabled' : ''}>${escHtml(product.name)} (${currency(product.price)}${product.stock === 0 ? ', out of stock' : ''})</option>`
-    ).join('');
-    document.getElementById('manualAmount').value = '';
-    document.getElementById('manualOrderMessage').textContent = '';
+    // Delivery: load delivery catalog items only (dal, curry, chapati, etc.)
+    const plansData = await api('/delivery-plans').catch(() => ({ plans: [] }));
+    manualOrderCatalog = extractDeliveryCatalogItems(plansData.plans || []);
+    // manualOrderProducts stays empty — delivery form shows no pickup products
+    renderManualOrderItems();
+    renderManualAddItemRows();
     manualOrderModal.hidden = false;
     manualOrderModal.setAttribute('aria-hidden', 'false');
     document.getElementById('manualFirstName').focus();
   } catch (error) {
-    alert(error.message || 'Could not load products.');
+    alert(error.message || 'Could not load delivery catalog.');
   }
 });
 
-function updateManualOrderAmount() {
-  const product = manualOrderProducts.find((item) => String(item._id) === document.getElementById('manualProduct').value);
-  const quantity = Number(document.getElementById('manualQuantity').value) || 1;
-  document.getElementById('manualAmount').value = product ? (Number(product.price) * quantity).toFixed(2) : '';
-}
+// ── Add Pickup Order ──────────────────────────────────────────────────────────
+document.getElementById('addPickupOrderBtn')?.addEventListener('click', async () => {
+  openManualOrderModal('pickup');
+  try {
+    // Pickup: load pickup products only — no delivery catalog items
+    const productsData = await api('/products/all').catch(() => ({ products: [] }));
+    manualOrderProducts = (productsData.products || []).filter((p) => p.active !== false);
+    // manualOrderCatalog stays empty — pickup form shows no delivery items
+    renderManualOrderItems();
+    renderManualAddItemRows();
+    manualOrderModal.hidden = false;
+    manualOrderModal.setAttribute('aria-hidden', 'false');
+    document.getElementById('manualFirstName').focus();
+  } catch (error) {
+    alert(error.message || 'Could not load pickup catalog.');
+  }
+});
 
-document.getElementById('manualProduct')?.addEventListener('change', updateManualOrderAmount);
-document.getElementById('manualQuantity')?.addEventListener('input', updateManualOrderAmount);
+// ── Add Another Item button ───────────────────────────────────────────────────
+document.getElementById('manualAddAnotherItemBtn')?.addEventListener('click', () => {
+  manualOrderItemRows.push(createEmptyManualItemRow());
+  renderManualAddItemRows();
+});
+
+// ── Add-row click (Add / Remove row buttons) ──────────────────────────────────
+document.getElementById('manualAddItemRows')?.addEventListener('click', (event) => {
+  const removeButton = event.target.closest('.manual-add-item-remove');
+  const addButton = event.target.closest('.manual-add-item-add');
+  if (removeButton) {
+    const rowId = Number(removeButton.dataset.manualRowId);
+    manualOrderItemRows = manualOrderItemRows.filter((r) => r.id !== rowId);
+    if (!manualOrderItemRows.length) manualOrderItemRows = [createEmptyManualItemRow()];
+    renderManualAddItemRows();
+    return;
+  }
+  if (addButton) {
+    const rowId = Number(addButton.dataset.manualRowId);
+    mergeManualAddItemRow(rowId);
+  }
+});
+
+// ── Add-row change (item select / size select / quantity) ─────────────────────
+document.getElementById('manualAddItemRows')?.addEventListener('change', (event) => {
+  const rowId = Number(event.target.dataset.manualRowId);
+  const row = manualOrderItemRows.find((r) => r.id === rowId);
+  if (!row) return;
+  if (event.target.matches('.manual-add-item-select')) {
+    if (event.target.value === '__custom__') {
+      row.itemKey = '__custom__';
+      row.isCustom = true;
+      row.size = '';
+    } else {
+      row.itemKey = event.target.value;
+      row.isCustom = false;
+      row.customName = '';
+      const catalogItem = manualOrderCatalog.find((c) => c.key === row.itemKey);
+      row.size = catalogItem?.supportsSize && catalogItem.sizes.includes(row.size) ? row.size : '';
+    }
+    renderManualAddItemRows();
+    return;
+  }
+  if (event.target.matches('.manual-add-item-size')) {
+    row.size = event.target.value;
+    return;
+  }
+  if (event.target.matches('.manual-add-item-quantity')) {
+    row.quantity = event.target.value;
+    const qty = Number(event.target.value);
+    document.getElementById('manualOrderMessage').textContent =
+      (!Number.isSafeInteger(qty) || qty < 1) ? 'Quantity must be a positive whole number.' : '';
+  }
+});
+
+// ── Add-row input (custom name / quantity live) ───────────────────────────────
+document.getElementById('manualAddItemRows')?.addEventListener('input', (event) => {
+  const rowId = Number(event.target.dataset.manualRowId);
+  const row = manualOrderItemRows.find((r) => r.id === rowId);
+  if (!row) return;
+  if (event.target.matches('.manual-add-item-custom-name')) {
+    row.customName = event.target.value;
+    return;
+  }
+  if (event.target.matches('.manual-add-item-quantity')) {
+    row.quantity = event.target.value;
+  }
+});
+
+// ── Confirmed-item-list step / remove / quantity-change ───────────────────────
+document.getElementById('manualOrderItemsList')?.addEventListener('click', (event) => {
+  const stepButton = event.target.closest('.tiffin-item-step');
+  const removeButton = event.target.closest('.tiffin-item-remove');
+  if (!stepButton && !removeButton) return;
+  const index = Number((stepButton || removeButton).dataset.manualItemIndex);
+  if (!Number.isInteger(index) || !manualOrderItems[index]) return;
+  if (removeButton) {
+    manualOrderItems.splice(index, 1);
+  } else {
+    const nextQty = Number(manualOrderItems[index].quantity) + Number(stepButton.dataset.step);
+    manualOrderItems[index].quantity = Math.max(1, nextQty);
+  }
+  renderManualOrderItems();
+});
+
+document.getElementById('manualOrderItemsList')?.addEventListener('change', (event) => {
+  if (!event.target.matches('.tiffin-item-quantity')) return;
+  const index = Number(event.target.dataset.manualItemIndex);
+  const qty = Number(event.target.value);
+  if (!Number.isInteger(index) || !manualOrderItems[index]) return;
+  if (!Number.isSafeInteger(qty) || qty < 1) {
+    document.getElementById('manualOrderMessage').textContent = 'Quantity must be a positive whole number.';
+    renderManualOrderItems();
+    return;
+  }
+  manualOrderItems[index].quantity = qty;
+  document.getElementById('manualOrderMessage').textContent = '';
+  updateManualOrderAmount();
+});
+
 document.getElementById('manualOrderCloseBtn')?.addEventListener('click', closeManualOrderModal);
 document.getElementById('manualOrderCancelBtn')?.addEventListener('click', closeManualOrderModal);
 manualOrderModal?.addEventListener('click', (event) => {
@@ -1647,15 +2031,40 @@ manualOrderForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const submitButton = document.getElementById('manualOrderSubmit');
   const message = document.getElementById('manualOrderMessage');
-  const productId = document.getElementById('manualProduct').value;
-  const product = manualOrderProducts.find((item) => String(item._id) === productId);
-  const quantity = Number(document.getElementById('manualQuantity').value);
-  const amount = Number(document.getElementById('manualAmount').value);
-  const fulfillment = state.ordersFulfillment || 'delivery';
-  if (!product || !Number.isInteger(quantity) || quantity < 1 || quantity > 99 || !Number.isFinite(amount) || amount < 0) {
-    message.textContent = 'Choose a product and enter a valid quantity and amount.';
+  // Use the mode the modal was opened in (not state.ordersFulfillment which can change)
+  const fulfillment = manualOrderMode || 'delivery';
+
+  // Merge any pending rows that have partial input
+  for (const row of manualOrderItemRows) {
+    const hasInput = row.isCustom ? row.customName.trim() : row.itemKey;
+    if (hasInput) {
+      const ok = mergeManualAddItemRow(row.id);
+      if (!ok) return;
+    }
+  }
+
+  // Validate: need at least one item
+  if (!manualOrderItems.length) {
+    message.textContent = 'Add at least one item before creating the order.';
     return;
   }
+  if (manualOrderItems.length > 50) {
+    message.textContent = 'An order can contain at most 50 items.';
+    return;
+  }
+  for (const item of manualOrderItems) {
+    if (!Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1) {
+      message.textContent = 'Quantity must be a positive whole number.';
+      return;
+    }
+  }
+
+  const amount = Number(document.getElementById('manualAmount').value);
+  if (!Number.isFinite(amount) || amount < 0) {
+    message.textContent = 'Enter a valid non-negative amount.';
+    return;
+  }
+
   if (!manualPickupDate.value) {
     message.textContent = 'Order date is required.';
     manualPickupDate.reportValidity();
@@ -1666,6 +2075,21 @@ manualOrderForm?.addEventListener('submit', async (event) => {
     manualPickupDate.reportValidity();
     return;
   }
+
+  // Build items payload — strip internal bookkeeping fields
+  const itemsPayload = manualOrderItems.map((item) => ({
+    productId: item.productId && /^[a-fA-F0-9]{24}$/.test(String(item.productId)) ? item.productId : null,
+    productName: item.productName,
+    category: item.category || 'General',
+    fulfillment: item.fulfillment || (fulfillment === 'pickup' ? 'pickup' : 'delivery'),
+    priceAtPurchase: Number(item.priceAtPurchase) || 0,
+    quantity: Number(item.quantity),
+    subtotal: Math.round((Number(item.priceAtPurchase) || 0) * Number(item.quantity) * 100) / 100,
+    preparationType: item.preparationType || null,
+    itemKey: item.itemKey || null,
+    size: item.size || null
+  }));
+
   submitButton.disabled = true;
   message.textContent = 'Creating order...';
   try {
@@ -1676,8 +2100,7 @@ manualOrderForm?.addEventListener('submit', async (event) => {
         lastName: document.getElementById('manualLastName').value.trim(),
         phone: document.getElementById('manualPhone').value.trim(),
         email: document.getElementById('manualEmail').value.trim(),
-        productId,
-        quantity,
+        items: itemsPayload,
         amount,
         fulfillment,
         address: document.getElementById('manualAddress').value.trim(),
@@ -1692,6 +2115,7 @@ manualOrderForm?.addEventListener('submit', async (event) => {
     submitButton.disabled = false;
   }
 });
+
 
 function displayProductCategory(category) {
   const value = String(category || '').trim();
@@ -3190,6 +3614,22 @@ if (typeof module !== 'undefined' && module.exports) {
     renderOrdersTable,
     renderOrderAmountEditor,
     isDeliveryTiffinOrder,
-    openTiffinItemsEditor
+    openTiffinItemsEditor,
+    // Manual order multi-item selector
+    openManualOrderModal,
+    createEmptyManualItemRow,
+    mergeManualAddItemRow,
+    renderManualOrderItems,
+    renderManualAddItemRows,
+    get manualOrderMode() { return manualOrderMode; },
+    set manualOrderMode(v) { manualOrderMode = v; },
+    get manualOrderItems() { return manualOrderItems; },
+    set manualOrderItems(v) { manualOrderItems = v; },
+    get manualOrderItemRows() { return manualOrderItemRows; },
+    set manualOrderItemRows(v) { manualOrderItemRows = v; },
+    get manualOrderCatalog() { return manualOrderCatalog; },
+    set manualOrderCatalog(v) { manualOrderCatalog = v; },
+    get manualOrderProducts() { return manualOrderProducts; },
+    set manualOrderProducts(v) { manualOrderProducts = v; }
   };
 }

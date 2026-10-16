@@ -15,6 +15,17 @@
     </header>
     <div class="orders-intro"><p class="eyebrow">CUSTOMER ACCOUNT</p><h1>My Orders</h1><p class="muted">Track each order as it moves from the kitchen to your door. Updates appear automatically.</p></div>
     <div id="ordersMessage" class="form-message" aria-live="polite"></div>
+    <nav class="orders-tabs" aria-label="Order status tabs">
+      <button class="orders-tab active" data-tab="ongoing" type="button">
+        Ongoing <span class="tab-count" id="tabCountOngoing"></span>
+      </button>
+      <button class="orders-tab" data-tab="delivered" type="button">
+        Delivered <span class="tab-count" id="tabCountDelivered"></span>
+      </button>
+      <button class="orders-tab" data-tab="cancelled" type="button">
+        Cancelled <span class="tab-count" id="tabCountCancelled"></span>
+      </button>
+    </nav>
     <section id="ordersList" class="orders-list"></section>
   </main>
   <script src="/socket.io/socket.io.js"></script>

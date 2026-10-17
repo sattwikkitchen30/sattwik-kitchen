@@ -189,13 +189,13 @@ test('Part 2: Delivery subscription moves to Delivered only after subscription e
   assert.equal(classifyComponent(comp), 'delivered');
 });
 
-test('Part 2: Delivery subscription with DELIVERED status but future end date stays Ongoing', () => {
+test('Part 2: Delivery subscription with daily DELIVERED status appears in Delivered tab', () => {
   const futureEnd = new Date();
   futureEnd.setDate(futureEnd.getDate() + 5);
   const order = makeDeliveryOrder({ status: 'DELIVERED', subscriptionEndDate: futureEnd.toISOString().slice(0, 10) });
   const [comp] = extractComponents(order);
-  // Server-side reset: status DELIVERED but end still in future → still active
-  assert.equal(classifyComponent(comp), 'ongoing');
+  // Daily delivery completed: appears in Delivered tab until next eligible service day reset
+  assert.equal(classifyComponent(comp), 'delivered');
 });
 
 test('Part 2: Cancelled pickup component appears only under Cancelled tab', () => {

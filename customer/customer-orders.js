@@ -150,14 +150,9 @@ function componentAmount(order, fulfillmentType) {
  * Classify a fulfillment component into 'ongoing', 'delivered', or 'cancelled'.
  */
 function classifyComponent(component) {
-  const { type, status } = component;
+  const status = String(component?.status || '').toUpperCase();
   if (status === 'CANCELLED') return 'cancelled';
-
-  if (type === 'pickup') {
-    return status === 'DELIVERED' ? 'delivered' : 'ongoing';
-  }
-  // delivery subscription
-  if (isSubscriptionFullyComplete(component.order)) return 'delivered';
+  if (status === 'DELIVERED') return 'delivered';
   return 'ongoing';
 }
 

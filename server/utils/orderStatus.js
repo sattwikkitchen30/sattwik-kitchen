@@ -42,7 +42,8 @@ function getPickupStatus(order) {
 function getTransition(order, requested, fulfillment, now, actor) {
   const pickupItems = (order.items || []).filter((item) => item.fulfillment === 'pickup');
   const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
-  const isPickupOnly = pickupItems.length > 0 && deliveryItems.length === 0;
+  const isPickupOnly = (pickupItems.length > 0 && deliveryItems.length === 0)
+    || (order.fulfillment === 'pickup' && deliveryItems.length === 0);
   const scope = fulfillment || (isPickupOnly ? 'pickup' : 'delivery');
   const current = scope === 'pickup' ? getPickupStatus(order) : resolveDeliveryStatus(order, now);
   const orderCancelled = normalizeStatus(order.status) === 'CANCELLED';
@@ -54,10 +55,10 @@ function getTransition(order, requested, fulfillment, now, actor) {
   if (!['pickup', 'delivery'].includes(scope)) {
     return { error: { status: 400, message: 'Fulfillment must be pickup or delivery.' } };
   }
-  if (scope === 'pickup' && !pickupItems.length) {
+  if (scope === 'pickup' && !pickupItems.length && (order.items && order.items.length > 0)) {
     return { error: { status: 400, message: 'Order has no pickup items.' } };
   }
-  if (scope === 'delivery' && !deliveryItems.length) {
+  if (scope === 'delivery' && !deliveryItems.length && (order.items && order.items.length > 0)) {
     return { error: { status: 400, message: 'Order has no delivery items.' } };
   }
   if (orderCancelled || current === 'CANCELLED') {
@@ -93,7 +94,7 @@ function getTransition(order, requested, fulfillment, now, actor) {
 
   const serviceDates = getOrderServiceDates(order);
   const currentServiceDate = getCurrentServiceDate(order, now);
-  if (scope === 'delivery' && serviceDates.length && !currentServiceDate) {
+  if (scope === 'delivery' && requested !== 'ACCEPTED' && serviceDates.length && !currentServiceDate) {
     return { error: { status: 400, message: 'No delivery service is scheduled for today.' } };
   }
   return { current, scope, pickupItems, deliveryItems, isPickupOnly, currentServiceDate };
@@ -107,8 +108,8 @@ async function transitionOrderStatus(Order, order, requestedStatus, options = {}
   if (options.actor === 'delivery' && !['OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'].includes(requested)) {
     return { error: { status: 400, message: 'Delivery members cannot set this status.' } };
   }
-  if (requested === 'ACCEPTED' && options.actor === 'delivery') {
-    return { error: { status: 400, message: 'Only an admin can accept an order.' } };
+  if (requested === 'ACCEPTED' && options.actor !== 'admin') {
+    return { error: { status: 403, message: 'Only an admin can accept an order.' } };
   }
 
   const filter = {

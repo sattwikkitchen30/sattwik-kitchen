@@ -62,13 +62,26 @@ function withCurrentDeliveryStatus(order, now = new Date()) {
 
 function isTiffinPreparationEligible(order, serviceDate) {
   if (!order || String(order.status || '').toUpperCase() === 'CANCELLED') return false;
+  if (!isServiceDay(serviceDate)) return false;
+
+  const items = Array.isArray(order.items) ? order.items : [];
+  const hasDelivery = (order.fulfillment === 'delivery' || order.fulfillment === 'mixed' || order.type === 'tiffin' || Boolean(order.packageType))
+    && (items.length === 0 || items.some((item) => (item.fulfillment || order.fulfillment) === 'delivery'));
+  if (!hasDelivery) return false;
+
+  const serviceDates = getOrderServiceDates(order);
+  if (serviceDates.length > 0) {
+    const serviceKey = formatDateKey(serviceDate);
+    if (!serviceDates.some((date) => formatDateKey(date) === serviceKey)) return false;
+  }
   return ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(resolveDeliveryStatus(order, serviceDate));
 }
 
 function filterTiffinPreparationSubscriptions(subscriptions, serviceDate) {
-  return (subscriptions || []).filter((subscription) => (
-    isTiffinPreparationEligible(subscription?.orderId, serviceDate)
-  ));
+  return (subscriptions || []).filter((entry) => {
+    const order = (entry?.orderId && typeof entry.orderId === 'object') ? entry.orderId : entry;
+    return isTiffinPreparationEligible(order, serviceDate);
+  });
 }
 
 module.exports = {

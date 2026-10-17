@@ -589,34 +589,40 @@
   </div>
 
   <div id="manualOrderModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="manualOrderTitle" hidden>
-    <div class="modal-shell">
+    <div class="modal-shell manual-order-modal">
       <div class="modal-header">
         <h3 id="manualOrderTitle">Add Delivery Order</h3>
         <button type="button" class="modal-close" id="manualOrderCloseBtn" aria-label="Close">&times;</button>
       </div>
       <form id="manualOrderForm" class="stacked-form" novalidate>
-        <label>Customer First Name<input id="manualFirstName" type="text" required autocomplete="given-name" /></label>
-        <label>Customer Last Name<input id="manualLastName" type="text" required autocomplete="family-name" /></label>
-        <label>Phone<input id="manualPhone" type="tel" required autocomplete="tel" /></label>
-        <label>Email<input id="manualEmail" type="email" required autocomplete="email" /></label>
-        <label>Amount ($)<input id="manualAmount" type="number" min="0" step="0.01" required /></label>
+        <div class="manual-order-row-2col">
+          <label>Customer First Name<input id="manualFirstName" type="text" required autocomplete="given-name" /></label>
+          <label>Customer Last Name<input id="manualLastName" type="text" required autocomplete="family-name" /></label>
+        </div>
+        <div class="manual-order-row-2col">
+          <label>Phone<input id="manualPhone" type="tel" required autocomplete="tel" /></label>
+          <label>Email<input id="manualEmail" type="email" required autocomplete="email" /></label>
+        </div>
+        <div class="manual-order-row-2col">
+          <label>Amount ($)<input id="manualAmount" type="number" min="0" step="0.01" required /></label>
+          <label id="manualPickupDateField">Order Date (Pickup Date / Delivery Start Date)<input id="manualPickupDate" type="date" required /></label>
+        </div>
         <label id="manualAddressLabel">Delivery Address (optional)<input id="manualAddress" type="text" autocomplete="street-address" /></label>
-        <label id="manualPickupDateField">Order Date (Pickup Date / Delivery Start Date)<input id="manualPickupDate" type="date" required /></label>
         <p id="manualOrderFulfillment" class="manual-order-fulfillment">Delivery order</p>
         <h4 class="tiffin-items-section-title">Selected Items</h4>
         <div id="manualOrderItemsList" class="tiffin-items-list"></div>
         <h4 class="tiffin-items-section-title">Add Items</h4>
         <div id="manualAddItemsTable" class="tiffin-add-items-table" role="table" aria-label="Order items">
           <div class="tiffin-add-items-header" role="row">
-            <span role="columnheader">Item</span>
-            <span role="columnheader" class="manual-size-col">Size</span>
-            <span role="columnheader">Quantity</span>
-            <span role="columnheader" class="visually-hidden">Actions</span>
+            <span role="columnheader"></span>
+            <span role="columnheader" class="manual-size-col"></span>
+            <span role="columnheader" class="manual-qty-col"></span>
+            <span role="columnheader" class="visually-hidden"></span>
           </div>
           <div id="manualAddItemRows"></div>
         </div>
         <button type="button" id="manualAddAnotherItemBtn" class="btn btn-secondary tiffin-add-item-toggle">Add Another Item</button>
-        <div class="manual-order-actions" style="margin-top:14px;">
+        <div class="manual-order-actions">
           <button type="submit" class="btn btn-primary" id="manualOrderSubmit">Create order</button>
           <button type="button" class="btn btn-secondary" id="manualOrderCancelBtn">Cancel</button>
         </div>
@@ -638,9 +644,9 @@
       <h4 class="tiffin-items-section-title">Add Items</h4>
       <div class="tiffin-add-items-table" role="table" aria-label="Additional delivery items">
         <div class="tiffin-add-items-header" role="row">
-          <span role="columnheader">Select Item</span>
-          <span role="columnheader">Size</span>
-          <span role="columnheader">Quantity</span>
+          <span role="columnheader"></span>
+          <span role="columnheader"></span>
+          <span role="columnheader"></span>
           <span role="columnheader" class="visually-hidden">Actions</span>
         </div>
         <div id="tiffinAddItemRows"></div>

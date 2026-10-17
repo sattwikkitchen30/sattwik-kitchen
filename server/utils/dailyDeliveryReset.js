@@ -66,7 +66,7 @@ function startDailyDeliveryReset(Order, app, { now = () => new Date(), setTimeou
     if (stopped) return;
     const currentTime = now();
     const vancouverNow = DateTime.fromJSDate(currentTime).setZone(BUSINESS_TIMEZONE);
-    const nextServiceDay = vancouverNow.plus({ days: 1 }).startOf('day');
+    let nextServiceDay = vancouverNow.plus({ days: 1 }).startOf('day');
     while (!isServiceDay(nextServiceDay.toJSDate())) {
       nextServiceDay = nextServiceDay.plus({ days: 1 });
     }

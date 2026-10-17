@@ -84,7 +84,7 @@ io.on('connection', (socket) => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  console.error('[sattwik] unhandled rejection:', reason instanceof Error ? reason.message : reason);
+  console.error('[sattwik] unhandled rejection:', reason instanceof Error ? (reason.stack || reason.message) : reason);
 });
 
 httpServer.listen(PORT, async () => {

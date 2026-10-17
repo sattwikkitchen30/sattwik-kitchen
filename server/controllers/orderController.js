@@ -7,7 +7,7 @@ const { TIFFIN_PRICES, tiffinDisplayName, ORDER_STATUSES } = require('../utils/c
 const { emitOrderUpdate } = require('../utils/orderEvents');
 const { parseDateInput, formatDateKey, addDays, startOfDay, getSubscriptionServiceDates } = require('../utils/tiffinPreparation');
 const { getOrderServiceDates, getCurrentServiceDate, resolveDeliveryStatus, applyDeliveryStatus, withCurrentDeliveryStatus } = require('../utils/deliveryStatus');
-const { PREPARATION_TYPES, TIFFIN_PREPARATION_ITEMS, getTiffinPreparationType, buildDefaultTiffinItems, getLegacyOrderTiffinItems, isDeliveryTiffinOrder } = require('../utils/tiffinItems');
+const { PREPARATION_TYPES, TIFFIN_PREPARATION_ITEMS, TIFFIN_PREP_KEY_MAP, getTiffinPreparationType, buildDefaultTiffinItems, buildOrderTiffinItems, getLegacyOrderTiffinItems, isDeliveryTiffinOrder } = require('../utils/tiffinItems');
 const DeliveryPlan = require('../models/DeliveryPlan');
 const { extractDeliveryCatalogItems, resolveDeliveryCatalogSelection, normalizeItemKey, getCanonicalIdentity, resolveCustomItem } = require('../utils/deliveryCatalogItems');
 const { getOrderCustomer } = require('../utils/orderCustomer');
@@ -346,6 +346,7 @@ async function createManualOrder(req, res) {
   if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
     return res.status(400).json({ message: 'Enter a valid non-negative amount.' });
   }
+  const roundedAmount = Math.round((parsedAmount + Number.EPSILON) * 100) / 100;
 
   // ── Items validation ──────────────────────────────────────────────────────
   const itemsInput = Array.isArray(rawItems) ? rawItems : [];
@@ -469,8 +470,23 @@ async function createManualOrder(req, res) {
     if (!customer) throw error;
   }
 
-  // ── Create order ──────────────────────────────────────────────────────────
-  const roundedAmount = Math.round(parsedAmount * 100) / 100;
+  let detectedTiffinPlan = null;
+  if (hasDelivery) {
+    for (const item of orderItems) {
+      const match = String(item.productName || '').match(/(Full\s*Meal|Curry(?:-|\s*)Only)(?:\s+Package)?(?:\s*\(|\s*[-—–:]\s*)(Single|Couple|Family)\)?/i);
+      if (match) {
+        detectedTiffinPlan = {
+          packageType: /^curry/i.test(match[1]) ? 'curry-only' : 'full',
+          size: match[2].toLowerCase(),
+          price: Number(item.priceAtPurchase) || 0
+        };
+        break;
+      }
+    }
+  }
+
+  const deliveryTiffinItems = hasDelivery ? buildOrderTiffinItems(orderItems, detectedTiffinPlan) : undefined;
+
   let order;
   try {
     order = await Order.create({
@@ -486,7 +502,9 @@ async function createManualOrder(req, res) {
       },
       items: orderItems,
       fulfillment: orderFulfillment,
-      type: 'product',
+      type: hasDelivery ? 'tiffin' : 'product',
+      ...(hasDelivery && detectedTiffinPlan ? { tiffinPlan: detectedTiffinPlan } : {}),
+      ...(hasDelivery && deliveryTiffinItems ? { tiffinItems: deliveryTiffinItems } : {}),
       totalAmount: roundedAmount,
       pickupDate,
       subscriptionStartDate: subscriptionDates?.startDate || null,
@@ -897,11 +915,11 @@ async function updateTiffinItems(req, res) {
 
   const productIds = new Set();
   let catalog = null;
-  const needsDeliveryCatalog = items.some((item) => (
-    item?.isAdditional
-    && !PREPARATION_TYPES.includes(item?.preparationType)
-    && !(item?.productId && mongoose.isValidObjectId(item.productId))
-  ));
+  const needsDeliveryCatalog = items.some((item) => {
+    const isPrep = PREPARATION_TYPES.includes(item?.preparationType) || PREPARATION_TYPES.includes(getTiffinPreparationType(item?.productName));
+    const isProd = item?.productId && mongoose.isValidObjectId(item.productId);
+    return !isPrep && !isProd;
+  });
   if (needsDeliveryCatalog) {
     const plans = await DeliveryPlan.find({}).select('items').lean();
     catalog = extractDeliveryCatalogItems(plans);
@@ -913,11 +931,12 @@ async function updateTiffinItems(req, res) {
       return res.status(400).json({ message: 'Tiffin item quantities must be positive whole numbers.' });
     }
     const hasValidProductId = item?.productId && mongoose.isValidObjectId(item.productId);
+    const isPrep = PREPARATION_TYPES.includes(item?.preparationType) || PREPARATION_TYPES.includes(getTiffinPreparationType(item?.productName));
     if (hasValidProductId) {
       productIds.add(String(item.productId));
-    } else if (PREPARATION_TYPES.includes(item?.preparationType)) {
+    } else if (isPrep) {
       continue;
-    } else if (item?.isAdditional) {
+    } else {
       const catalogItem = catalog?.find((entry) => (
         entry.key === item.itemKey || entry.key === normalizeItemKey(item.productName)
       ));
@@ -932,8 +951,6 @@ async function updateTiffinItems(req, res) {
           return res.status(400).json({ message: customRes.error });
         }
       }
-    } else {
-      return res.status(400).json({ message: 'Invalid tiffin preparation item.' });
     }
   }
 
@@ -1000,25 +1017,18 @@ async function updateTiffinItems(req, res) {
       continue;
     }
 
-    if (PREPARATION_TYPES.includes(item?.preparationType)) {
-      const component = TIFFIN_PREPARATION_ITEMS[item.preparationType];
-      const mapped = {
-        smallDal: { itemKey: 'dal', size: 'small' },
-        mediumDal: { itemKey: 'dal', size: 'medium' },
-        largeDal: { itemKey: 'dal', size: 'large' },
-        smallCurry: { itemKey: 'curry', size: 'small' },
-        mediumCurry: { itemKey: 'curry', size: 'medium' },
-        largeCurry: { itemKey: 'curry', size: 'large' },
-        smallCurd: { itemKey: 'curd', size: 'small' },
-        bigCurd: { itemKey: 'curd', size: 'large' },
-        chapathi: { itemKey: 'chapati', size: null },
-        riceBox: { itemKey: 'rice', size: null }
-      }[item.preparationType];
+    const prepType = (item?.preparationType && PREPARATION_TYPES.includes(item.preparationType))
+      ? item.preparationType
+      : getTiffinPreparationType(item?.productName);
+
+    if (prepType && PREPARATION_TYPES.includes(prepType)) {
+      const component = TIFFIN_PREPARATION_ITEMS[prepType];
+      const mapped = TIFFIN_PREP_KEY_MAP[prepType];
       resolvedItems.push({
         productId: null,
         productName: component.productName,
         category: component.category,
-        preparationType: item.preparationType,
+        preparationType: prepType,
         quantity,
         isAdditional,
         itemKey: item.itemKey || mapped?.itemKey || null,
@@ -1037,7 +1047,7 @@ async function updateTiffinItems(req, res) {
       resolvedItems.push({
         ...resolved,
         quantity,
-        isAdditional: true,
+        isAdditional: item.isAdditional !== undefined ? Boolean(item.isAdditional) : true,
         itemKey: catalogItem.key,
         size: item.size || null,
         originalQuantity: Number.isInteger(item.originalQuantity) ? item.originalQuantity : undefined,
@@ -1051,7 +1061,7 @@ async function updateTiffinItems(req, res) {
       resolvedItems.push({
         ...customRes,
         quantity,
-        isAdditional: true,
+        isAdditional: item.isAdditional !== undefined ? Boolean(item.isAdditional) : true,
         originalQuantity: Number.isInteger(item.originalQuantity) ? item.originalQuantity : undefined,
         additionalQuantity: Number.isInteger(item.additionalQuantity) ? item.additionalQuantity : undefined
       });
@@ -1099,6 +1109,105 @@ async function updateTiffinItems(req, res) {
 
   order.tiffinItems = [...mergedMap.values()];
   order.tiffinItemsCustomized = true;
+
+  // Synchronize delivery items in order.items with updated tiffinItems
+  const existingItems = Array.isArray(order.items)
+    ? order.items.map((i) => (i.toObject ? i.toObject() : { ...i }))
+    : [];
+  const pickupItems = existingItems.filter((i) => (i.fulfillment || order.fulfillment) === 'pickup');
+
+  const isPackageItem = (item) => {
+    if ((item?.fulfillment || order.fulfillment) !== 'delivery') return false;
+    const cat = String(item?.category || '').toLowerCase();
+    const name = String(item?.productName || '');
+    return /^(?:Tiffin Plan\s*[-—–:]\s*)?(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(/i.test(name)
+      || /^(?:Full Meal|Curry(?:-|\s+)Only)\b/i.test(name)
+      || (cat === 'tiffin plans' && !getTiffinPreparationType(name));
+  };
+
+  const packageItems = existingItems.filter(isPackageItem);
+  const hasPackage = packageItems.length > 0 || Boolean(order.tiffinPlan?.packageType);
+
+  if (hasPackage) {
+    order.items = existingItems.map((item) => {
+      if ((item.fulfillment || order.fulfillment) === 'pickup' || isPackageItem(item)) {
+        return item;
+      }
+      const ident = getCanonicalIdentity(item);
+      const match = order.tiffinItems.find((t) => (
+        getCanonicalIdentity(t) === ident ||
+        (t.productName || '').toLowerCase() === (item.productName || '').toLowerCase() ||
+        (t.productId && String(t.productId) === String(item.productId))
+      ));
+      if (!match) return item;
+      const qty = match.isAdditional && match.additionalQuantity !== undefined ? match.additionalQuantity : match.quantity;
+      const price = Number(item.priceAtPurchase) || 0;
+      return {
+        ...item,
+        quantity: qty,
+        subtotal: Math.round(price * qty * 100) / 100
+      };
+    });
+  } else {
+    const validDeliveryStatuses = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'];
+    const fallbackStatus = validDeliveryStatuses.includes(String(order.status || '').toUpperCase())
+      ? String(order.status).toUpperCase()
+      : 'ACCEPTED';
+
+    const matchedTiffinItemIndices = new Set();
+    const updatedItems = [];
+
+    for (const item of existingItems) {
+      if ((item.fulfillment || order.fulfillment) === 'pickup') {
+        updatedItems.push(item);
+        continue;
+      }
+      const ident = getCanonicalIdentity(item);
+      const matchIndex = order.tiffinItems.findIndex((t, idx) => (
+        !matchedTiffinItemIndices.has(idx) && (
+          getCanonicalIdentity(t) === ident ||
+          (t.productName || '').toLowerCase() === (item.productName || '').toLowerCase() ||
+          (t.productId && String(t.productId) === String(item.productId))
+        )
+      ));
+      if (matchIndex !== -1) {
+        matchedTiffinItemIndices.add(matchIndex);
+        const tItem = order.tiffinItems[matchIndex];
+        const qty = Number(tItem.quantity) || 1;
+        const price = Number(item.priceAtPurchase) || 0;
+        const rawStatus = String(item.deliveryStatus || fallbackStatus).toUpperCase();
+        const deliveryStatus = validDeliveryStatuses.includes(rawStatus) ? rawStatus : fallbackStatus;
+        updatedItems.push({
+          ...item,
+          productName: tItem.productName,
+          category: tItem.category || item.category || 'Tiffin Preparation',
+          fulfillment: 'delivery',
+          deliveryStatus,
+          quantity: qty,
+          subtotal: Math.round(price * qty * 100) / 100
+        });
+      }
+    }
+
+    order.tiffinItems.forEach((tItem, idx) => {
+      if (!matchedTiffinItemIndices.has(idx)) {
+        const qty = Number(tItem.quantity) || 1;
+        updatedItems.push({
+          productId: tItem.productId || null,
+          productName: tItem.productName,
+          category: tItem.category || 'Tiffin Preparation',
+          fulfillment: 'delivery',
+          deliveryStatus: fallbackStatus,
+          priceAtPurchase: 0,
+          quantity: qty,
+          subtotal: 0
+        });
+      }
+    });
+
+    order.items = updatedItems;
+  }
+
   order.totalAmount = previousAmount;
   await order.save();
   emitOrderUpdate(req.app, order);

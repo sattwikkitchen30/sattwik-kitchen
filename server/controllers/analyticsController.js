@@ -1,10 +1,11 @@
+const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const Product = require('../models/Product');
 const TiffinSubscription = require('../models/TiffinSubscription');
 const TiffinMenuSelection = require('../models/TiffinMenuSelection');
 const { dateMatch, TIFFIN_MENU_BY_WEEKDAY } = require('../utils/constants');
-const { parseDateInput, formatDateKey, getWeekdayName, getMenuForDate, dateLabel, startOfDay, endOfDay, buildPreparationTotals, buildActivePlanCounts, syncExpiredTiffinSubscriptions } = require('../utils/tiffinPreparation');
+const { parseDateInput, formatDateKey, getWeekdayName, isServiceDay, getMenuForDate, dateLabel, startOfDay, endOfDay, buildPreparationTotals, buildActivePlanCounts, syncExpiredTiffinSubscriptions } = require('../utils/tiffinPreparation');
 const { filterTiffinPreparationSubscriptions } = require('../utils/deliveryStatus');
 const { dateMatch: timezoneAwareDateMatch } = require('../utils/dateFilter');
 
@@ -496,12 +497,13 @@ async function tiffinPreparation(req, res) {
   res.set('Cache-Control', 'no-store');
   const requestedDate = parseDateInput(req.query.date || new Date());
   const dateKey = formatDateKey(requestedDate);
-  const selectedDate = new Date(`${dateKey}T12:00:00`);
+  const selectedDate = dateKey;
   const weekday = getWeekdayName(selectedDate);
+  const serviceDay = isServiceDay(selectedDate);
   const menu = getMenuForDate(selectedDate);
   const selection = await TiffinMenuSelection.findOne({ date: dateKey }).lean();
 
-  if (!menu) {
+  if (!serviceDay) {
     return res.json({
       selectedDate: dateKey,
       weekday,
@@ -520,7 +522,8 @@ async function tiffinPreparation(req, res) {
         riceBoxes: 0,
         chapathiCount: 0,
         smallCurd: 0,
-        bigCurd: 0
+        bigCurd: 0,
+        otherItems: []
       },
       message: 'No tiffin service on this day.'
     });
@@ -528,15 +531,69 @@ async function tiffinPreparation(req, res) {
 
   await syncExpiredTiffinSubscriptions(new Date());
 
+  const startLimit = endOfDay(selectedDate);
+  const endLimit = startOfDay(selectedDate);
+
   const subscriptions = await TiffinSubscription.find({
     status: { $ne: 'CANCELLED' },
-    startDate: { $lte: endOfDay(selectedDate) },
-    endDate: { $gte: startOfDay(selectedDate) }
+    startDate: { $lte: startLimit },
+    endDate: { $gte: endLimit }
   }).populate(
     'orderId',
-    'tiffinItems tiffinItemsCustomized tiffinPlan items status subscriptionStartDate subscriptionEndDate deliveryStatusDate acceptedAt outForDeliveryAt deliveredAt'
+    'fulfillment type tiffinItems tiffinItemsCustomized tiffinPlan items status subscriptionStartDate subscriptionEndDate deliveryStatusDate acceptedAt outForDeliveryAt deliveredAt'
   ).lean();
-  const eligibleSubscriptions = filterTiffinPreparationSubscriptions(subscriptions, selectedDate);
+
+  const directOrders = (mongoose.connection?.readyState === 1 || Order.find !== mongoose.Model.find)
+    ? await Order.find({
+        status: { $in: ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'confirmed', 'preparing', 'ready', 'delivered'] },
+        $and: [
+          {
+            $or: [
+              { type: 'tiffin' },
+              { fulfillment: { $in: ['delivery', 'mixed'] } },
+              { 'items.fulfillment': 'delivery' }
+            ]
+          },
+          {
+            $or: [
+              {
+                subscriptionStartDate: { $lte: startLimit },
+                subscriptionEndDate: { $gte: endLimit }
+              },
+              {
+                subscriptionStartDate: { $lte: startLimit },
+                subscriptionEndDate: null
+              }
+            ]
+          }
+        ]
+      }).lean()
+    : [];
+
+  const knownOrderIds = new Set();
+  const combinedEntries = [];
+
+  for (const sub of subscriptions) {
+    const subOrderId = sub.orderId?._id || sub.orderId?.id || sub.orderId;
+    if (subOrderId) {
+      knownOrderIds.add(String(subOrderId));
+    }
+    if (sub.orderId?.orderId) {
+      knownOrderIds.add(String(sub.orderId.orderId));
+    }
+    combinedEntries.push(sub);
+  }
+
+  for (const order of directOrders) {
+    const idKey = String(order._id || order.id || order.orderId);
+    const orderNum = order.orderId ? String(order.orderId) : null;
+    if (knownOrderIds.has(idKey) || (orderNum && knownOrderIds.has(orderNum))) {
+      continue;
+    }
+    combinedEntries.push({ ...order, orderId: order });
+  }
+
+  const eligibleSubscriptions = filterTiffinPreparationSubscriptions(combinedEntries, selectedDate);
 
   const totals = buildPreparationTotals(eligibleSubscriptions);
   const activePlanCounts = buildActivePlanCounts(eligibleSubscriptions);
@@ -550,7 +607,7 @@ async function tiffinPreparation(req, res) {
     selectedMenu: selection || { date: dateKey, dalOption: 'Not selected', curryOption: 'Not selected' },
     activePlanCounts,
     totals,
-    message: ''
+    message: menu ? '' : 'Menu is unavailable for this service day.'
   });
 }
 

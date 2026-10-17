@@ -12,8 +12,17 @@ function pad(value, size = 2) {
 
 function toVancouverDateTime(dateValue) {
   if (!dateValue) return null;
-  if (typeof dateValue === 'string' && DATE_ONLY_PATTERN.test(dateValue)) {
-    return DateTime.fromISO(dateValue, { zone: BUSINESS_TIMEZONE }).set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+  if (typeof dateValue === 'string') {
+    const trimmed = dateValue.trim();
+    if (DATE_ONLY_PATTERN.test(trimmed)) {
+      return DateTime.fromISO(trimmed, { zone: BUSINESS_TIMEZONE }).set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+    }
+    const isoDateOnlyMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoDateOnlyMatch && !/[zZ]|[+-]\d{2}/.test(trimmed)) {
+      return DateTime.fromISO(isoDateOnlyMatch[1], { zone: BUSINESS_TIMEZONE }).set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+    }
+    const dt = DateTime.fromISO(trimmed, { zone: BUSINESS_TIMEZONE });
+    if (dt.isValid) return dt;
   }
   if (dateValue instanceof Date) {
     return DateTime.fromJSDate(dateValue).setZone(BUSINESS_TIMEZONE);
@@ -167,19 +176,23 @@ function buildPreparationTotals(subscriptions = []) {
   const otherItems = new Map();
   const countedCustomizedOrders = new Set();
 
-  for (const subscription of subscriptions) {
-    if (!subscription) continue;
-    const order = subscription.orderId || subscription;
+  for (const entry of subscriptions) {
+    if (!entry) continue;
+    const isPopulatedOrder = entry.orderId && typeof entry.orderId === 'object' && ('tiffinItems' in entry.orderId || 'tiffinItemsCustomized' in entry.orderId || 'items' in entry.orderId);
+    const order = isPopulatedOrder ? entry.orderId : entry;
+
     let tiffinItems;
-    if (order.tiffinItemsCustomized) {
-      const orderId = order._id || order.id;
-      const orderKey = orderId ? String(orderId) : order;
-      if (countedCustomizedOrders.has(orderKey)) continue;
-      countedCustomizedOrders.add(orderKey);
-      tiffinItems = getLegacyOrderTiffinItems(order, subscription);
+    if (order.tiffinItemsCustomized || (Array.isArray(order.tiffinItems) && order.tiffinItems.length > 0)) {
+      const orderId = order._id || order.id || order.orderId;
+      const orderKey = orderId ? String(orderId) : null;
+      if (orderKey) {
+        if (countedCustomizedOrders.has(orderKey)) continue;
+        countedCustomizedOrders.add(orderKey);
+      }
+      tiffinItems = getLegacyOrderTiffinItems(order, entry);
     } else {
-      tiffinItems = buildDefaultTiffinItems([subscription]);
-      if (!tiffinItems.length) tiffinItems = getLegacyOrderTiffinItems(order, subscription);
+      tiffinItems = buildDefaultTiffinItems([entry]);
+      if (!tiffinItems.length) tiffinItems = getLegacyOrderTiffinItems(order, entry);
     }
 
     for (const item of tiffinItems) {
@@ -216,12 +229,15 @@ function buildActivePlanCounts(subscriptions = []) {
     'curry-only': { single: 0, couple: 0, family: 0 }
   };
 
-  for (const subscription of subscriptions) {
-    if (!subscription || !subscription.packageType || !subscription.size) continue;
-    const packageType = String(subscription.packageType);
-    const size = String(subscription.size);
-    const quantity = Number(subscription.quantity) || 1;
+  for (const entry of subscriptions) {
+    if (!entry) continue;
+    const order = (entry.orderId && typeof entry.orderId === 'object') ? entry.orderId : entry;
+    const plan = entry.packageType ? entry : order.tiffinPlan;
+    if (!plan || !plan.packageType || !plan.size) continue;
+    const packageType = String(plan.packageType).toLowerCase();
+    const size = String(plan.size).toLowerCase();
     if (!count[packageType]) continue;
+    const quantity = Number(entry.quantity || plan.quantity) || 1;
     count[packageType][size] = (count[packageType][size] || 0) + quantity;
   }
 

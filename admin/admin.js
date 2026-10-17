@@ -375,10 +375,21 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
   if (!datePicker || !dateLabelEl || !content) return;
 
   datePicker.value = dateString;
-  dateLabelEl.textContent = new Date(`${dateString}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const [y, m, d] = dateString.split('-').map(Number);
+  const vancouverNoon = new Date(Date.UTC(y, m - 1, d, 20, 0, 0));
+  dateLabelEl.textContent = vancouverNoon.toLocaleDateString('en-US', {
+    timeZone: 'America/Vancouver',
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric'
+  });
 
   try {
     const data = await api(`/analytics/tiffin-preparation?date=${encodeURIComponent(dateString)}`, { cache: 'no-store' });
+    if (data.dateLabel) {
+      dateLabelEl.textContent = data.dateLabel;
+    }
     const totals = data.totals || {};
     const counts = data.activePlanCounts || { full: { single: 0, couple: 0, family: 0 }, 'curry-only': { single: 0, couple: 0, family: 0 } };
     const selectedMenu = data.selectedMenu || { dalOption: 'Not selected', curryOption: 'Not selected' };
@@ -386,10 +397,10 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
 
     statusMessage.textContent = data.message || '';
 
-    if (!data.serviceExists || !menu) {
+    if (!data.serviceExists) {
       content.innerHTML = `
         <div class="prep-empty-state">
-          <strong>No tiffin service on this day.</strong>
+          <strong>${escHtml(data.message || 'No tiffin service on this day.')}</strong>
         </div>
       `;
       return;
@@ -409,35 +420,41 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
       ...(totals.otherItems || []).map((item) => ({ item: item.item, quantity: '—', count: item.count }))
     ];
 
-    const menuRows = [
+    const menuRows = menu ? [
       `<li><strong>Dal:</strong> ${menu.dalOptions?.join(' / ') || 'Not available'}</li>`,
       `<li><strong>Curry:</strong> ${menu.curryOptions?.join(' / ') || 'Not available'}</li>`,
       `<li><strong>Rice:</strong> ${menu.rice?.join(' / ') || 'Not available'}</li>`,
       `<li><strong>Chapati:</strong> ${menu.chapati?.join(' / ') || 'Not available'}</li>`,
       `<li><strong>Curd:</strong> ${menu.curd?.join(' / ') || 'Not available'}</li>`
+    ] : [
+      `<li><em>Menu is unavailable for this service day.</em></li>`
     ];
+
+    const menuControls = menu ? `
+      <div class="prep-capture-controls">
+        <label>
+          <span>Dal</span>
+          <select id="prepDalOptionSelect">
+            <option value="Not selected" ${selectedMenu.dalOption === 'Not selected' ? 'selected' : ''}>Not selected</option>
+            ${(menu.dalOptions || []).map((option) => `<option value="${option}" ${selectedMenu.dalOption === option ? 'selected' : ''}>${option}</option>`).join('')}
+          </select>
+        </label>
+        <label>
+          <span>Curry</span>
+          <select id="prepCurryOptionSelect">
+            <option value="Not selected" ${selectedMenu.curryOption === 'Not selected' ? 'selected' : ''}>Not selected</option>
+            ${(menu.curryOptions || []).map((option) => `<option value="${option}" ${selectedMenu.curryOption === option ? 'selected' : ''}>${option}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+    ` : '';
 
     content.innerHTML = `
       <div class="tiffin-prep-grid">
         <div class="panel card prep-card">
           <div class="panel-head"><h3>Today’s Menu</h3></div>
           <ul class="prep-menu-list">${menuRows.join('')}</ul>
-          <div class="prep-capture-controls">
-            <label>
-              <span>Dal</span>
-              <select id="prepDalOptionSelect">
-                <option value="Not selected" ${selectedMenu.dalOption === 'Not selected' ? 'selected' : ''}>Not selected</option>
-                ${menu.dalOptions.map((option) => `<option value="${option}" ${selectedMenu.dalOption === option ? 'selected' : ''}>${option}</option>`).join('')}
-              </select>
-            </label>
-            <label>
-              <span>Curry</span>
-              <select id="prepCurryOptionSelect">
-                <option value="Not selected" ${selectedMenu.curryOption === 'Not selected' ? 'selected' : ''}>Not selected</option>
-                ${menu.curryOptions.map((option) => `<option value="${option}" ${selectedMenu.curryOption === option ? 'selected' : ''}>${option}</option>`).join('')}
-              </select>
-            </label>
-          </div>
+          ${menuControls}
         </div>
 
         <div class="panel card prep-card">
@@ -515,14 +532,18 @@ async function loadTiffinPreparation(dateString = state.tiffinPreparationDate ||
   }
 }
 
+function shiftDateKey(dateKey, deltaDays) {
+  const [y, m, d] = String(dateKey).slice(0, 10).split('-').map(Number);
+  const utc = new Date(Date.UTC(y, m - 1, d + deltaDays, 12, 0, 0));
+  return utc.toISOString().slice(0, 10);
+}
+
 function bindTiffinPreparationControls() {
   const prevDayBtn = document.getElementById('prepPrevDay');
   if (prevDayBtn) {
     prevDayBtn.addEventListener('click', () => {
       const dateStr = state.tiffinPreparationDate || getLocalDateString(new Date());
-      const date = new Date(`${dateStr}T12:00:00Z`);
-      date.setUTCDate(date.getUTCDate() - 1);
-      loadTiffinPreparation(getLocalDateString(date));
+      loadTiffinPreparation(shiftDateKey(dateStr, -1));
     });
   }
 
@@ -530,9 +551,7 @@ function bindTiffinPreparationControls() {
   if (nextDayBtn) {
     nextDayBtn.addEventListener('click', () => {
       const dateStr = state.tiffinPreparationDate || getLocalDateString(new Date());
-      const date = new Date(`${dateStr}T12:00:00Z`);
-      date.setUTCDate(date.getUTCDate() + 1);
-      loadTiffinPreparation(getLocalDateString(date));
+      loadTiffinPreparation(shiftDateKey(dateStr, 1));
     });
   }
 
@@ -675,6 +694,10 @@ function isDeliveryTiffinOrder(order) {
     return false;
   }
 
+  if ((Array.isArray(order.tiffinItems) && order.tiffinItems.length > 0) || order.tiffinItemsCustomized) {
+    return true;
+  }
+
   const hasDeliveryPlanItem = items.some((item) => {
     const isDelivery = (item.fulfillment || order.fulfillment) === 'delivery';
     if (!isDelivery) return false;
@@ -684,7 +707,9 @@ function isDeliveryTiffinOrder(order) {
       || cat === 'tiffin preparation'
       || cat === 'tiffin'
       || /^(?:Tiffin Plan\s*[-—–:]\s*)?(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\(/i.test(name)
-      || /^(?:Full Meal|Curry(?:-|\s+)Only)\b/i.test(name);
+      || /^(?:Full Meal|Curry(?:-|\s+)Only)\b/i.test(name)
+      || Boolean(item.preparationType)
+      || /\b(dal|curry|curries|curd|chapathi|chapati|chapatti|rice)\b/i.test(name);
   });
 
   if (hasDeliveryPlanItem) return true;
@@ -1587,7 +1612,7 @@ document.getElementById('tiffinItemsSaveBtn')?.addEventListener('click', async (
     closeTiffinItemsEditor();
     showAdminToast('Order items updated successfully.');
     try {
-      if (state.ordersFulfillment === 'delivery') await renderOrdersTable();
+      if (!state.ordersFulfillment || state.ordersFulfillment === 'delivery') await renderOrdersTable();
       await loadTiffinPreparation(state.tiffinPreparationDate);
     } catch (error) {
       console.error('Order items were saved, but the dashboard refresh failed:', error);
@@ -1636,8 +1661,8 @@ function renderManualOrderItems() {
   if (!list) return;
   list.innerHTML = manualOrderItems.length
     ? manualOrderItems.map((item, index) => `
-      <div class="tiffin-item-row">
-        <strong>${escHtml(item.productName)}</strong>
+      <div class="tiffin-item-row manual-order-item-row">
+        <strong class="manual-item-name" title="${escHtml(item.productName)}">${escHtml(item.productName)}</strong>
         <button type="button" class="tiffin-item-step" data-manual-item-index="${index}" data-step="-1" aria-label="Decrease ${escHtml(item.productName)} quantity">−</button>
         <input class="tiffin-item-quantity" type="number" min="1" step="1" value="${Number(item.quantity)}" data-manual-item-index="${index}" aria-label="${escHtml(item.productName)} quantity" />
         <button type="button" class="tiffin-item-step" data-manual-item-index="${index}" data-step="1" aria-label="Increase ${escHtml(item.productName)} quantity">+</button>
@@ -3630,6 +3655,8 @@ if (typeof module !== 'undefined' && module.exports) {
     get manualOrderCatalog() { return manualOrderCatalog; },
     set manualOrderCatalog(v) { manualOrderCatalog = v; },
     get manualOrderProducts() { return manualOrderProducts; },
-    set manualOrderProducts(v) { manualOrderProducts = v; }
+    set manualOrderProducts(v) { manualOrderProducts = v; },
+    shiftDateKey,
+    loadTiffinPreparation
   };
 }

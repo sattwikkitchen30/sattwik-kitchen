@@ -231,14 +231,28 @@ function deliveryStatusLabel(status) {
     ACCEPTED: 'Accepted',
     OUT_FOR_DELIVERY: 'Out for Delivery',
     DELIVERED: 'Delivered',
-    CANCELLED: 'Cancelled'
+    CANCELLED: 'Cancelled',
+    EXPIRED: 'Expired'
   })[status] || status;
 }
 
+/**
+ * Renders the read-only customer feedback cell for the admin orders table.
+ * Shows a short preview (≤120 chars) with a tooltip containing the full text.
+ * Returns '—' when no feedback has been submitted.
+ */
+function renderAdminFeedbackCell(order, componentType) {
+  const feedbackMap = order.customerFeedback || {};
+  const text = typeof feedbackMap === 'object' ? (feedbackMap[componentType] || '') : '';
+  if (!text) return '<span class="admin-feedback-empty">—</span>';
+  const preview = text.length > 120 ? `${text.slice(0, 117)}…` : text;
+  return `<span class="admin-feedback-preview" title="${escHtml(text)}">${escHtml(preview)}</span>`;
+}
+
 function renderDeliveryStatusOptions(status, includeCancelled = false, canCancel = true) {
-  const values = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
+  const values = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'EXPIRED'];
   if (includeCancelled) values.push('CANCELLED');
-  return values.map((value) => `<option value="${value}" ${status === value ? 'selected' : ''} ${value === 'CANCELLED' && (!canCancel || ['DELIVERED', 'CANCELLED'].includes(status)) ? 'disabled' : ''}>${deliveryStatusLabel(value)}</option>`).join('');
+  return values.map((value) => `<option value="${value}" ${status === value ? 'selected' : ''} ${value === 'CANCELLED' && (!canCancel || ['DELIVERED', 'CANCELLED', 'EXPIRED'].includes(status)) ? 'disabled' : ''}>${deliveryStatusLabel(value)}</option>`).join('');
 }
 
 function renderPickupStatusControl(orderId, status, canCancel = true) {
@@ -760,8 +774,8 @@ async function renderOrdersTable() {
   const resultCount = document.getElementById('ordersResultCount');
   if (resultCount) resultCount.textContent = `${orders.length} ${orders.length === 1 ? 'order' : 'orders'} found`;
   const headers = state.ordersFulfillment === 'delivery'
-    ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Fulfillment', 'Start Date', 'End Date', 'Delivery Member', 'Amount', 'Status']
-    : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Pickup Date', 'Status', 'Amount'];
+    ? ['Order ID', 'Customer Name', 'Contact Details', 'Item', 'Type', 'Fulfillment', 'Start Date', 'End Date', 'Delivery Member', 'Amount', 'Status', 'Customer Feedback']
+    : ['Order', 'Customer / contact', 'Items', 'Type', 'Fulfillment', 'Date', 'Pickup Date', 'Status', 'Amount', 'Customer Feedback'];
 
   table.innerHTML = `
     <table>
@@ -840,10 +854,11 @@ async function renderOrdersTable() {
                 </td>
                 <td>${amountEditor}</td>
                 <td>
-                  <select class="tiffin-status-select order-status-select" data-order-id="${order._id}" data-current-status="${tiffinStatus}" ${['DELIVERED', 'CANCELLED'].includes(tiffinStatus) ? 'disabled' : ''}>
+                  <select class="tiffin-status-select order-status-select" data-order-id="${order._id}" data-current-status="${tiffinStatus}" ${['DELIVERED', 'CANCELLED', 'EXPIRED'].includes(tiffinStatus) ? 'disabled' : ''}>
                     ${renderDeliveryStatusOptions(tiffinStatus, true, canCancel)}
                   </select>
                 </td>
+                <td class="order-feedback-cell">${renderAdminFeedbackCell(order, 'delivery')}</td>
               </tr>
             `;
           }
@@ -884,14 +899,15 @@ async function renderOrdersTable() {
               ? `<td>Delivery</td><td><div class="tiffin-end-date-cell"><span class="saved-date">${deliveryStartDateVal || '—'}</span><input type="date" class="delivery-start-date-input" data-order-id="${order._id}" value="${deliveryStartDateVal}" /><button class="delivery-start-date-save" data-order-id="${order._id}">Save</button></div></td><td><div class="tiffin-end-date-cell"><span class="saved-date">${deliveryEndDateVal || '—'}</span><input type="date" class="delivery-end-date-input" data-order-id="${order._id}" value="${deliveryEndDateVal}" /><button class="delivery-end-date-save" data-order-id="${order._id}">Save</button></div></td>${deliveryAssignment}<td>${renderOrderAmountEditor(order)}</td>`
               : `<td>Pickup</td><td>${orderDateTime}</td><td><div class="tiffin-end-date-cell pickup-date-editor" data-order-id="${order._id}"><span class="saved-date">${pickupDateVal || '—'}</span><input type="date" class="pickup-date-input" data-order-id="${order._id}" value="${pickupDateVal}" /><button type="button" class="pickup-date-save" data-order-id="${order._id}">Save</button></div></td>`}
             <td>
-              ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}" ${['DELIVERED', 'CANCELLED'].includes(String(order.status).toUpperCase()) ? 'disabled' : ''}>
+              ${state.ordersFulfillment === 'delivery' ? `<select class="order-status-select" data-order-id="${order._id}" data-current-status="${order.status}" ${['DELIVERED', 'CANCELLED', 'EXPIRED'].includes(String(order.status).toUpperCase()) ? 'disabled' : ''}>
                 ${renderDeliveryStatusOptions(order.status, true, canCancel)}
               </select><span class="badge ${String(order.status).toLowerCase()}">${deliveryStatusLabel(order.status)}</span>` : renderPickupStatusControl(order._id, pickupStatus, canCancel)}
             </td>
             ${state.ordersFulfillment === 'pickup' ? `<td>${renderOrderAmountEditor(order)}</td>` : ''}
+            <td class="order-feedback-cell">${renderAdminFeedbackCell(order, state.ordersFulfillment === 'delivery' ? 'delivery' : 'pickup')}</td>
           </tr>
         `;
-        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 11 : 9}">No ${state.ordersFulfillment} orders match the selected filters.</td></tr>`}
+        }).join('') || `<tr><td colspan="${state.ordersFulfillment === 'delivery' ? 12 : 10}">No ${state.ordersFulfillment} orders match the selected filters.</td></tr>`}
       </tbody>
     </table>
   `;
@@ -1029,6 +1045,14 @@ async function renderOrdersTable() {
       alert(error.message || 'Assignment failed');
     }
   }));
+
+  table.querySelectorAll('.payment-history-btn').forEach((button) => button.addEventListener('click', async () => {
+    try {
+      await openPaymentHistoryModal(button.dataset.orderId);
+    } catch (error) {
+      showAdminToast(error.message || 'Could not open payment history.');
+    }
+  }));
 }
 
 function renderOrderAmountEditor(order) {
@@ -1038,8 +1062,300 @@ function renderOrderAmountEditor(order) {
       <span>${currency(amount)}</span>
       <input class="order-amount-input" type="number" min="0" step="0.01" value="${amount.toFixed(2)}" data-order-id="${order._id}" aria-label="Order amount" />
       <button type="button" class="order-amount-save" data-order-id="${order._id}">Save</button>
+      <button type="button" class="payment-history-btn" data-order-id="${order._id}">Payment History</button>
     </div>
   `;
+}
+
+let currentPaymentOrderId = null;
+let currentEditCustomerId = null;
+
+async function openPaymentHistoryModal(orderId) {
+  if (!orderId) return;
+  currentPaymentOrderId = orderId;
+
+  const modal = document.getElementById('paymentHistoryModal');
+  const modalTitle = document.getElementById('paymentHistoryTitle');
+  const formMessage = document.getElementById('paymentFormMessage');
+  const table = document.getElementById('paymentHistoryTable');
+
+  modalTitle.textContent = 'Payment History';
+  formMessage.textContent = '';
+  table.innerHTML = '<div class="table-empty-message">Loading payment history...</div>';
+
+  try {
+    const data = await api(`/orders/${orderId}/payments`);
+
+    document.getElementById('paymentOrderId').textContent = data.orderId || '—';
+    document.getElementById('paymentCustomerName').textContent = data.customerName || '—';
+    document.getElementById('paymentOrderTotal').textContent = currency(data.totalAmount);
+    document.getElementById('paymentTotalPaid').textContent = currency(data.totalPaid);
+    document.getElementById('paymentOutstandingBalance').textContent = currency(data.outstandingBalance);
+
+    let paymentStatus = 'Unpaid';
+    if (data.totalPaid >= data.totalAmount) {
+      paymentStatus = 'Paid';
+    } else if (data.totalPaid > 0) {
+      paymentStatus = 'Partially Paid';
+    }
+    document.getElementById('paymentStatus').textContent = paymentStatus;
+
+    if (data.payments && data.payments.length > 0) {
+      table.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Amount</th>
+              <th>Date</th>
+              <th>Method</th>
+              <th>Notes</th>
+              <th>Recorded</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.payments.map((payment) => `
+              <tr>
+                <td>${currency(payment.amount)}</td>
+                <td>${payment.paymentDate ? new Date(payment.paymentDate).toLocaleDateString('en-US', { timeZone: 'America/Vancouver' }) : '—'}</td>
+                <td>${escHtml(payment.method)}</td>
+                <td>${escHtml(payment.notes || '—')}</td>
+                <td>${payment.createdAt ? new Date(payment.createdAt).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Vancouver' }) : '—'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    } else {
+      table.innerHTML = '<div class="table-empty-message">No payments recorded yet.</div>';
+    }
+
+    document.getElementById('paymentDate').value = getLocalDateString(new Date());
+    document.getElementById('paymentAmount').value = '';
+    document.getElementById('paymentMethod').value = '';
+    document.getElementById('paymentNotes').value = '';
+
+    modal.hidden = false;
+  } catch (error) {
+    table.innerHTML = '<div class="table-empty-message">Failed to load payment history.</div>';
+    showAdminToast(error.message || 'Could not load payment history.');
+  }
+}
+
+function closePaymentHistoryModal() {
+  const modal = document.getElementById('paymentHistoryModal');
+  modal.hidden = true;
+  currentPaymentOrderId = null;
+}
+
+async function openEditCustomerModal(customerId) {
+  if (!customerId) return;
+  currentEditCustomerId = customerId;
+
+  const modal = document.getElementById('customerEditModal');
+  const formMessage = document.getElementById('customerEditMessage');
+
+  if (formMessage) formMessage.textContent = '';
+
+  try {
+    const data = await api(`/customers/${customerId}`);
+    const customer = data.customer || {};
+
+    const idInput = document.getElementById('editCustomerId');
+    if (idInput) idInput.value = customer._id || '';
+
+    const fullName = [customer.firstName, customer.lastName].filter(Boolean).join(' ');
+    const nameInput = document.getElementById('editCustomerName');
+    if (nameInput) nameInput.value = fullName;
+
+    const firstNameInput = document.getElementById('editCustomerFirstName');
+    if (firstNameInput) firstNameInput.value = customer.firstName || '';
+
+    const lastNameInput = document.getElementById('editCustomerLastName');
+    if (lastNameInput) lastNameInput.value = customer.lastName || '';
+
+    const phoneInput = document.getElementById('editCustomerPhone');
+    if (phoneInput) phoneInput.value = customer.phone || '';
+
+    const emailInput = document.getElementById('editCustomerEmail');
+    if (emailInput) emailInput.value = customer.email || '';
+
+    const areaInput = document.getElementById('editCustomerArea');
+    if (areaInput) areaInput.value = customer.area || '';
+
+    const addressInput = document.getElementById('editCustomerAddress');
+    if (addressInput) addressInput.value = customer.address || '';
+
+    if (modal) modal.hidden = false;
+  } catch (error) {
+    showAdminToast(error.message || 'Could not load customer details.');
+  }
+}
+
+function closeEditCustomerModal() {
+  const modal = document.getElementById('customerEditModal');
+  if (modal) modal.hidden = true;
+  currentEditCustomerId = null;
+  const form = document.getElementById('customerEditForm');
+  if (form) form.reset();
+  const formMessage = document.getElementById('customerEditMessage');
+  if (formMessage) formMessage.textContent = '';
+}
+
+if (window.location.pathname.endsWith('/dashboard.html')) {
+  document.getElementById('paymentHistoryCloseBtn')?.addEventListener('click', closePaymentHistoryModal);
+  document.getElementById('cancelPaymentBtn')?.addEventListener('click', closePaymentHistoryModal);
+
+  document.getElementById('customerEditCloseBtn')?.addEventListener('click', closeEditCustomerModal);
+  document.getElementById('cancelCustomerBtn')?.addEventListener('click', closeEditCustomerModal);
+
+  // Close modal when backdrop is clicked
+  document.getElementById('customerEditModal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeEditCustomerModal();
+  });
+
+  // Keep name and hidden firstName/lastName in sync
+  document.getElementById('editCustomerName')?.addEventListener('input', (e) => {
+    const parts = e.target.value.trim().split(/\s+/).filter(Boolean);
+    const fnEl = document.getElementById('editCustomerFirstName');
+    const lnEl = document.getElementById('editCustomerLastName');
+    if (fnEl) fnEl.value = parts[0] || '';
+    if (lnEl) lnEl.value = parts.slice(1).join(' ');
+  });
+
+  document.getElementById('customerEditForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!currentEditCustomerId) return;
+
+    const nameInput = document.getElementById('editCustomerName');
+    const firstNameInput = document.getElementById('editCustomerFirstName');
+    const lastNameInput = document.getElementById('editCustomerLastName');
+    const phoneInput = document.getElementById('editCustomerPhone');
+    const emailInput = document.getElementById('editCustomerEmail');
+    const areaInput = document.getElementById('editCustomerArea');
+    const addressInput = document.getElementById('editCustomerAddress');
+    const formMessage = document.getElementById('customerEditMessage');
+    const saveBtn = document.getElementById('saveCustomerBtn');
+
+    let name = nameInput ? nameInput.value.trim() : '';
+    let firstName = firstNameInput ? firstNameInput.value.trim() : '';
+    let lastName = lastNameInput ? lastNameInput.value.trim() : '';
+    const phone = phoneInput ? phoneInput.value.trim() : '';
+    const email = emailInput ? emailInput.value.trim() : '';
+    const area = areaInput ? areaInput.value.trim() : '';
+    const address = addressInput ? addressInput.value.trim() : '';
+
+    if (name) {
+      const parts = name.split(/\s+/).filter(Boolean);
+      firstName = parts[0] || '';
+      lastName = parts.slice(1).join(' ') || parts[0] || 'Customer';
+    } else if (firstName || lastName) {
+      name = [firstName, lastName].filter(Boolean).join(' ');
+    }
+
+    if (!name && !firstName) {
+      if (formMessage) formMessage.textContent = 'Name is required.';
+      return;
+    }
+
+    if (!phone) {
+      if (formMessage) formMessage.textContent = 'Phone number is required.';
+      return;
+    }
+
+    if (!/^[\d+\-()\s]{7,40}$/.test(phone) || !/\d/.test(phone)) {
+      if (formMessage) formMessage.textContent = 'Please enter a valid phone number.';
+      return;
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      if (formMessage) formMessage.textContent = 'Please enter a valid email address.';
+      return;
+    }
+
+    if (saveBtn && saveBtn.disabled) {
+      if (formMessage) formMessage.textContent = 'Saving is already in progress. Please wait.';
+      return;
+    }
+
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+    }
+    if (formMessage) formMessage.textContent = '';
+
+    try {
+      await api(`/customers/${currentEditCustomerId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name, firstName, lastName, phone, email, area, address })
+      });
+
+      showAdminToast('Customer details updated successfully.');
+      closeEditCustomerModal();
+      await renderCustomersTable();
+    } catch (error) {
+      if (formMessage) formMessage.textContent = error.message || 'Could not save customer details.';
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Changes';
+      }
+    }
+  });
+
+  document.getElementById('addPaymentForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!currentPaymentOrderId) return;
+
+    const amountInput = document.getElementById('paymentAmount');
+    const dateInput = document.getElementById('paymentDate');
+    const methodInput = document.getElementById('paymentMethod');
+    const notesInput = document.getElementById('paymentNotes');
+    const formMessage = document.getElementById('paymentFormMessage');
+    const submitBtn = document.getElementById('addPaymentBtn');
+
+    const amount = Number(amountInput?.value);
+    const paymentDate = dateInput?.value;
+    const method = methodInput?.value;
+    const notes = notesInput?.value;
+
+    if (!amount || amount <= 0) {
+      formMessage.textContent = 'Please enter a valid payment amount greater than 0.';
+      return;
+    }
+
+    if (!paymentDate) {
+      formMessage.textContent = 'Please select a payment date.';
+      return;
+    }
+
+    if (!method) {
+      formMessage.textContent = 'Please select a payment method.';
+      return;
+    }
+
+    if (submitBtn.disabled) {
+      formMessage.textContent = 'Payment is already being saved. Please wait.';
+      return;
+    }
+
+    submitBtn.disabled = true;
+    formMessage.textContent = 'Saving payment...';
+
+    try {
+      await api(`/orders/${currentPaymentOrderId}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({ amount, paymentDate, method, notes })
+      });
+
+      showAdminToast('Payment recorded successfully.');
+      await openPaymentHistoryModal(currentPaymentOrderId);
+      await loadDashboardData();
+    } catch (error) {
+      formMessage.textContent = error.message || 'Could not save payment.';
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
 }
 
 const TIFFIN_SIZE_ALIASES = {
@@ -1145,6 +1461,37 @@ function extractDeliveryCatalogItems(plans = []) {
     return a.name.localeCompare(b.name);
   });
   return catalog;
+}
+
+function unwrapDeliveryPlansResponse(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.plans)) return data.plans;
+  return [];
+}
+
+function summarizeDeliveryPlansPayload(data) {
+  const plans = unwrapDeliveryPlansResponse(data);
+  return {
+    topLevelType: Array.isArray(data) ? 'array' : (data && typeof data === 'object' ? `object:${Object.keys(data).join(',')}` : typeof data),
+    planCount: plans.length,
+    plans: plans.map((plan) => ({
+      displayName: plan.displayName,
+      packageType: plan.packageType,
+      size: plan.size,
+      active: plan.active,
+      itemShape: plan.items == null
+        ? 'missing'
+        : (Array.isArray(plan.items) ? 'array' : `object:${Object.keys(plan.items).join(',')}`),
+      dal: plan.items?.dal ?? null,
+      curry: plan.items?.curry ?? null,
+      chapati: plan.items?.chapati ?? plan.items?.chapathi ?? null,
+      rice: plan.items?.rice ?? null,
+      curd: plan.items?.curd ?? null,
+      dynamicItems: Array.isArray(plan.items?.dynamicItems)
+        ? plan.items.dynamicItems.map((item) => ({ name: item?.name, quantity: item?.quantity }))
+        : []
+    }))
+  };
 }
 
 function getCanonicalIdentity(item) {
@@ -1638,6 +1985,8 @@ let manualOrderItems = [];       // confirmed item rows (like tiffinEditorItems)
 let manualOrderItemRows = [];    // in-progress add rows (like tiffinEditorAdditionalRows)
 let manualOrderCatalog = [];     // delivery catalog (loaded on open, same as tiffin editor)
 let manualOrderProducts = [];    // pickup catalog products (for amount auto-calc)
+let manualOrderPlans = [];       // confirmed subscription plans
+let manualOrderDeliveryPlans = []; // delivery plans loaded from backend
 
 function createEmptyManualItemRow() {
   return { id: ++manualOrderItemRowSeq, itemKey: '', customName: '', size: '', quantity: '1', isCustom: false };
@@ -1649,10 +1998,13 @@ function closeManualOrderModal() {
   manualOrderModal.setAttribute('aria-hidden', 'true');
   manualOrderForm.reset();
   document.getElementById('manualOrderMessage').textContent = '';
+  setManualCatalogStatus('', '');
   manualOrderItems = [];
   manualOrderItemRows = [];
   manualOrderCatalog = [];
   manualOrderProducts = [];
+  manualOrderPlans = [];
+  manualOrderDeliveryPlans = [];
 }
 
 // Render the confirmed item list (same pattern as renderTiffinEditorItems)
@@ -1673,10 +2025,36 @@ function renderManualOrderItems() {
   updateManualOrderAmount();
 }
 
+function setManualCatalogStatus(kind, text) {
+  const status = document.getElementById('manualAddItemsStatus');
+  const retry = document.getElementById('manualRetryCatalogBtn');
+  if (status) status.textContent = text || '';
+  if (retry) retry.hidden = kind !== 'error';
+}
+
+function logManualItemDropdownState(reason) {
+  const container = document.getElementById('manualAddItemRows');
+  const dropdown = container?.querySelector?.('.manual-add-item-select') || null;
+  const optionMarkup = dropdown?.innerHTML || container?.innerHTML || '';
+  const optionCount = (optionMarkup.match(/<option\b/gi) || []).length;
+  console.log('[Add Delivery Order] Dropdown populate:', {
+    reason,
+    containerFound: Boolean(container),
+    dropdownFound: Boolean(dropdown),
+    dropdownId: dropdown?.id || '(no id; class=manual-add-item-select)',
+    optionCount,
+    catalogCount: manualOrderCatalog.length
+  });
+  return { container, dropdown, optionCount };
+}
+
 // Render the add-item rows (same pattern as renderTiffinAddItemRows)
 function renderManualAddItemRows() {
   const container = document.getElementById('manualAddItemRows');
-  if (!container) return;
+  if (!container) {
+    console.error('[Add Delivery Order] #manualAddItemRows not found');
+    return;
+  }
   container.innerHTML = manualOrderItemRows.map((row) => {
     const catalogItem = manualOrderCatalog.find((c) => c.key === row.itemKey) || null;
     const sizeDisabled = !row.isCustom && !catalogItem?.supportsSize;
@@ -1749,12 +2127,22 @@ function renderManualAddItemRows() {
       </div>
     `;
   }).join('');
+  logManualItemDropdownState('renderManualAddItemRows');
 }
 
 // Auto-calculate amount from confirmed items (reuses product prices + tiffin item subtotals)
 function updateManualOrderAmount() {
   const fulfillment = state.ordersFulfillment || 'delivery';
   let total = 0;
+  
+  // Add subscription plan prices (delivery only)
+  if (manualOrderMode !== 'pickup') {
+    for (const plan of manualOrderPlans) {
+      total += Number(plan.price) * Number(plan.quantity || 1);
+    }
+  }
+  
+  // Add individual item prices
   for (const item of manualOrderItems) {
     if (item.productId) {
       // Pickup product: use priceAtPurchase * quantity
@@ -1765,6 +2153,7 @@ function updateManualOrderAmount() {
     }
     // Tiffin preparation items have no direct price — admin sets the Amount field manually
   }
+  
   const amountField = document.getElementById('manualAmount');
   // Only auto-populate if we have priced items; otherwise let admin fill it
   if (amountField && total > 0) {
@@ -1886,6 +2275,159 @@ function mergeManualAddItemRow(rowId) {
 }
 
 
+// ── Render selected subscription plans ────────────────────────────────────────
+function renderManualOrderPlans() {
+  const container = document.getElementById('manualOrderPlansList');
+  if (!container) return;
+  
+  if (manualOrderMode === 'pickup') {
+    container.innerHTML = '';
+    return;
+  }
+  
+  if (!manualOrderPlans.length) {
+    container.innerHTML = '<p class="empty-message">No subscription plans selected</p>';
+    return;
+  }
+  
+  container.innerHTML = manualOrderPlans.map((plan, index) => `
+    <div class="tiffin-item-row">
+      <div class="tiffin-item-main">
+        <span class="tiffin-item-name">${escHtml(plan.displayName)}</span>
+        <span class="tiffin-item-meta">${escHtml(plan.packageType)} - ${escHtml(plan.size)}</span>
+      </div>
+      <div class="tiffin-item-actions">
+        <button type="button" class="tiffin-item-step" data-step="-1" data-manual-plan-index="${index}">−</button>
+        <input type="number" class="tiffin-item-quantity" value="${escHtml(plan.quantity)}" min="1" data-manual-plan-index="${index}" />
+        <button type="button" class="tiffin-item-step" data-step="1" data-manual-plan-index="${index}">+</button>
+        <button type="button" class="tiffin-item-remove" data-manual-plan-index="${index}">Remove</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ── Populate plan dropdown ───────────────────────────────────────────────────
+function populateManualPlanSelect() {
+  const select = document.getElementById('manualPlanSelect');
+  if (!select) return;
+  
+  const options = manualOrderDeliveryPlans
+    .filter(plan => plan.packageType && plan.active !== false)
+    .map(plan => ({
+      _id: plan._id,
+      displayName: plan.displayName,
+      packageType: plan.packageType,
+      size: plan.size,
+      price: plan.price
+    }))
+    .sort((a, b) => {
+      const typeOrder = { 'full': 0, 'curry-only': 1 };
+      const aType = typeOrder[a.packageType] ?? 99;
+      const bType = typeOrder[b.packageType] ?? 99;
+      if (aType !== bType) return aType - bType;
+      const sizeOrder = { 'single': 0, 'couple': 1, 'family': 2 };
+      const aSize = sizeOrder[a.size] ?? 99;
+      const bSize = sizeOrder[b.size] ?? 99;
+      if (aSize !== bSize) return aSize - bSize;
+      return a.displayName.localeCompare(b.displayName);
+    });
+  
+  if (options.length === 0) {
+    select.innerHTML = '<option value="">No subscription plans available</option>';
+    return;
+  }
+  
+  select.innerHTML = `
+    <option value="">Select a subscription plan</option>
+    ${options.map(plan => `<option value="${escHtml(plan._id)}">${escHtml(plan.displayName)} - $${plan.price.toFixed(2)}</option>`).join('')}
+  `;
+}
+
+// ── Add plan button handler ───────────────────────────────────────────────────
+document.getElementById('manualAddPlanBtn')?.addEventListener('click', () => {
+  const select = document.getElementById('manualPlanSelect');
+  const quantityInput = document.getElementById('manualPlanQuantity');
+  const message = document.getElementById('manualOrderMessage');
+  
+  const planId = select.value;
+  const quantity = Number(quantityInput.value);
+  
+  if (!planId) {
+    message.textContent = 'Select a subscription plan.';
+    return;
+  }
+  
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    message.textContent = 'Quantity must be a positive whole number.';
+    return;
+  }
+  
+  const plan = manualOrderDeliveryPlans.find(p => String(p._id) === planId);
+  if (!plan) {
+    message.textContent = 'Selected plan not found.';
+    return;
+  }
+  
+  // Check for duplicate plan
+  const existingIndex = manualOrderPlans.findIndex(p => 
+    p.packageType === plan.packageType && p.size === plan.size
+  );
+  
+  if (existingIndex >= 0) {
+    manualOrderPlans[existingIndex].quantity += quantity;
+  } else {
+    manualOrderPlans.push({
+      _id: plan._id,
+      displayName: plan.displayName,
+      packageType: plan.packageType,
+      size: plan.size,
+      price: plan.price,
+      quantity
+    });
+  }
+  
+  select.value = '';
+  quantityInput.value = '1';
+  message.textContent = '';
+  renderManualOrderPlans();
+  updateManualOrderAmount();
+});
+
+// ── Plan list click handlers ──────────────────────────────────────────────────
+document.getElementById('manualOrderPlansList')?.addEventListener('click', (event) => {
+  const stepButton = event.target.closest('.tiffin-item-step');
+  const removeButton = event.target.closest('.tiffin-item-remove');
+  if (!stepButton && !removeButton) return;
+  
+  const index = Number((stepButton || removeButton).dataset.manualPlanIndex);
+  if (!Number.isInteger(index) || !manualOrderPlans[index]) return;
+  
+  if (removeButton) {
+    manualOrderPlans.splice(index, 1);
+  } else {
+    const nextQty = Number(manualOrderPlans[index].quantity) + Number(stepButton.dataset.step);
+    manualOrderPlans[index].quantity = Math.max(1, nextQty);
+  }
+  
+  renderManualOrderPlans();
+  updateManualOrderAmount();
+});
+
+document.getElementById('manualOrderPlansList')?.addEventListener('change', (event) => {
+  if (!event.target.matches('.tiffin-item-quantity')) return;
+  const index = Number(event.target.dataset.manualPlanIndex);
+  const qty = Number(event.target.value);
+  if (!Number.isInteger(index) || !manualOrderPlans[index]) return;
+  if (!Number.isSafeInteger(qty) || qty < 1) {
+    document.getElementById('manualOrderMessage').textContent = 'Quantity must be a positive whole number.';
+    renderManualOrderPlans();
+    return;
+  }
+  manualOrderPlans[index].quantity = qty;
+  document.getElementById('manualOrderMessage').textContent = '';
+  updateManualOrderAmount();
+});
+
 // ── Shared helper: open the manual order modal in a given mode ────────────────
 function openManualOrderModal(fulfillment) {
   manualOrderMode = fulfillment === 'pickup' ? 'pickup' : 'delivery';
@@ -1900,32 +2442,146 @@ function openManualOrderModal(fulfillment) {
   // Apply / remove pickup-mode class so CSS toggles the Size column
   const addItemsTable = document.getElementById('manualAddItemsTable');
   if (addItemsTable) addItemsTable.classList.toggle('pickup-mode', isPickup);
+  
+  // Show/hide subscription plan section
+  const plansSection = document.getElementById('manualSubscriptionPlansSection');
+  if (plansSection) {
+    plansSection.hidden = isPickup;
+    if (plansSection.style) plansSection.style.display = isPickup ? 'none' : '';
+  }
+  const planSection = document.getElementById('manualPlanSelectSection') || document.querySelector('.manual-plan-select-section');
+  const plansList = document.getElementById('manualOrderPlansList');
+  const plansTitle = document.getElementById('manualOrderPlansTitle') || plansList?.previousElementSibling;
+  const addPlanTitle = document.getElementById('manualAddPlanTitle');
+  if (planSection) {
+    planSection.hidden = isPickup;
+    if (planSection.style) planSection.style.display = isPickup ? 'none' : '';
+  }
+  if (plansTitle) {
+    plansTitle.hidden = isPickup;
+    if (plansTitle.style) plansTitle.style.display = isPickup ? 'none' : '';
+  }
+  if (addPlanTitle) {
+    addPlanTitle.hidden = isPickup;
+    if (addPlanTitle.style) addPlanTitle.style.display = isPickup ? 'none' : '';
+  }
+  if (plansList) {
+    plansList.hidden = isPickup;
+    if (plansList.style) plansList.style.display = isPickup ? 'none' : '';
+    if (isPickup) plansList.innerHTML = '';
+  }
+  const planSelect = document.getElementById('manualPlanSelect');
+  if (planSelect) {
+    planSelect.disabled = isPickup;
+    if (isPickup) planSelect.value = '';
+  }
+  const planQty = document.getElementById('manualPlanQuantity');
+  if (planQty) {
+    planQty.disabled = isPickup;
+    if (isPickup) planQty.value = '1';
+  }
+  const addPlanBtn = document.getElementById('manualAddPlanBtn');
+  if (addPlanBtn) {
+    addPlanBtn.disabled = isPickup;
+  }
 
-  // Reset state
+  // Reset state. Catalog and delivery plans must be applied AFTER this reset —
+  // loading them first was wiping the Add Items dropdown.
   manualOrderItems = [];
   manualOrderItemRows = [createEmptyManualItemRow()];
   manualOrderCatalog = [];
   manualOrderProducts = [];
+  manualOrderPlans = [];
+  manualOrderDeliveryPlans = [];
   document.getElementById('manualAmount').value = '';
   document.getElementById('manualOrderMessage').textContent = '';
+  setManualCatalogStatus('', '');
+}
+
+function applyLoadedDeliveryPlans(payload) {
+  const plans = unwrapDeliveryPlansResponse(payload);
+  manualOrderDeliveryPlans = plans;
+  manualOrderCatalog = extractDeliveryCatalogItems(plans);
+  console.log('[Add Delivery Order] Extracted catalog items:', {
+    count: manualOrderCatalog.length,
+    items: manualOrderCatalog.map((item) => ({ key: item.key, name: item.name, sizes: item.sizes }))
+  });
+  populateManualPlanSelect();
+  if (!manualOrderCatalog.length) {
+    const message = plans.length
+      ? 'No preparation items are configured on the saved delivery plans. Add items to a delivery plan, then retry.'
+      : 'No delivery plans found. Create a delivery plan first, then retry.';
+    setManualCatalogStatus('error', message);
+  } else {
+    setManualCatalogStatus('', '');
+  }
+  return { plans, catalog: manualOrderCatalog };
+}
+
+async function fetchDeliveryPlansForManualOrder() {
+  console.log('[Add Delivery Order] Fetch starting: GET /api/delivery-plans');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${API_PREFIX}/delivery-plans`, {
+    headers,
+    credentials: 'include'
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text || 'Request failed' }; }
+  const summary = summarizeDeliveryPlansPayload(data);
+  console.log('[Add Delivery Order] HTTP status:', response.status, 'ok:', response.ok);
+  console.log('[Add Delivery Order] Response structure:', summary);
+  if (!response.ok) {
+    throw new Error(data.message || `Could not load delivery plans (HTTP ${response.status}).`);
+  }
+  return data;
+}
+
+async function loadAddDeliveryOrderForm() {
+  console.log('[Add Delivery Order] Button clicked; resetting modal then loading catalog');
+  openManualOrderModal('delivery');
+  setManualCatalogStatus('', 'Loading delivery items...');
+  try {
+    const data = await fetchDeliveryPlansForManualOrder();
+    applyLoadedDeliveryPlans(data);
+  } catch (error) {
+    console.error('[Add Delivery Order] Catalog load failed:', error?.message || error);
+    manualOrderCatalog = [];
+    manualOrderDeliveryPlans = [];
+    populateManualPlanSelect();
+    setManualCatalogStatus('error', `${error.message || 'Could not load delivery plans.'} You can retry loading items.`);
+  }
+  renderManualOrderPlans();
+  renderManualOrderItems();
+  renderManualAddItemRows();
+  if (manualOrderModal) {
+    manualOrderModal.hidden = false;
+    manualOrderModal.setAttribute('aria-hidden', 'false');
+  }
+  document.getElementById('manualFirstName')?.focus();
+}
+
+async function retryManualDeliveryCatalog() {
+  setManualCatalogStatus('', 'Loading delivery items...');
+  try {
+    const data = await fetchDeliveryPlansForManualOrder();
+    applyLoadedDeliveryPlans(data);
+  } catch (error) {
+    console.error('[Add Delivery Order] Retry failed:', error?.message || error);
+    setManualCatalogStatus('error', `${error.message || 'Could not load delivery plans.'} You can retry loading items.`);
+  }
+  renderManualAddItemRows();
+  populateManualPlanSelect();
 }
 
 // ── Add Delivery Order ────────────────────────────────────────────────────────
-document.getElementById('addDeliveryOrderBtn')?.addEventListener('click', async () => {
-  openManualOrderModal('delivery');
-  try {
-    // Delivery: load delivery catalog items only (dal, curry, chapati, etc.)
-    const plansData = await api('/delivery-plans').catch(() => ({ plans: [] }));
-    manualOrderCatalog = extractDeliveryCatalogItems(plansData.plans || []);
-    // manualOrderProducts stays empty — delivery form shows no pickup products
-    renderManualOrderItems();
-    renderManualAddItemRows();
-    manualOrderModal.hidden = false;
-    manualOrderModal.setAttribute('aria-hidden', 'false');
-    document.getElementById('manualFirstName').focus();
-  } catch (error) {
-    alert(error.message || 'Could not load delivery catalog.');
-  }
+document.getElementById('addDeliveryOrderBtn')?.addEventListener('click', () => {
+  loadAddDeliveryOrderForm();
+});
+
+document.getElementById('manualRetryCatalogBtn')?.addEventListener('click', () => {
+  retryManualDeliveryCatalog();
 });
 
 // ── Add Pickup Order ──────────────────────────────────────────────────────────
@@ -2068,10 +2724,17 @@ manualOrderForm?.addEventListener('submit', async (event) => {
     }
   }
 
-  // Validate: need at least one item
-  if (!manualOrderItems.length) {
-    message.textContent = 'Add at least one item before creating the order.';
-    return;
+  // Validate: need at least one item for pickup, or at least one item or plan for delivery
+  if (fulfillment === 'pickup') {
+    if (!manualOrderItems.length) {
+      message.textContent = 'Add at least one item before creating the order.';
+      return;
+    }
+  } else {
+    if (!manualOrderItems.length && !manualOrderPlans.length) {
+      message.textContent = 'Add at least one item or subscription plan before creating the order.';
+      return;
+    }
   }
   if (manualOrderItems.length > 50) {
     message.textContent = 'An order can contain at most 50 items.';
@@ -2115,6 +2778,17 @@ manualOrderForm?.addEventListener('submit', async (event) => {
     size: item.size || null
   }));
 
+  // Build plans payload - Pickup orders never include subscription plans
+  const plansPayload = fulfillment === 'pickup'
+    ? []
+    : manualOrderPlans.map((plan) => ({
+        planId: plan._id,
+        packageType: plan.packageType,
+        size: plan.size,
+        quantity: Number(plan.quantity),
+        price: Number(plan.price)
+      }));
+
   submitButton.disabled = true;
   message.textContent = 'Creating order...';
   try {
@@ -2126,6 +2800,7 @@ manualOrderForm?.addEventListener('submit', async (event) => {
         phone: document.getElementById('manualPhone').value.trim(),
         email: document.getElementById('manualEmail').value.trim(),
         items: itemsPayload,
+        plans: plansPayload,
         amount,
         fulfillment,
         address: document.getElementById('manualAddress').value.trim(),
@@ -2669,6 +3344,7 @@ document.addEventListener('keydown', (e) => {
     closeEditModal();
     closeAddModal();
     closeManualOrderModal();
+    closeEditCustomerModal();
   }
 });
 
@@ -2745,22 +3421,33 @@ async function renderCustomersTable() {
   const rows = data.customers || [];
   document.getElementById('customersTable').innerHTML = `
     <table>
-      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Area</th><th>Address</th><th>Registered</th><th>Orders</th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Area</th><th>Address</th><th>Registered</th><th>Orders</th><th>Actions</th></tr></thead>
       <tbody>
         ${rows.map((row) => `
           <tr>
-            <td>${row.firstName || ''} ${row.lastName || ''}</td>
-            <td>${row.email || '—'}</td>
-            <td>${row.phone || '—'}</td>
-            <td>${row.area}</td>
-            <td>${row.address || '—'}</td>
+            <td>${escHtml([row.firstName, row.lastName].filter(Boolean).join(' '))}</td>
+            <td>${escHtml(row.email || '—')}</td>
+            <td>${escHtml(row.phone || '—')}</td>
+            <td>${escHtml(row.area || '—')}</td>
+            <td>${escHtml(row.address || '—')}</td>
             <td>${dateLabel(row.createdAt)}</td>
             <td>${row.orders}</td>
+            <td><button type="button" class="btn btn-secondary edit-customer-btn" data-customer-id="${row._id}">Edit</button></td>
           </tr>
-        `).join('') || '<tr><td colspan="7">No customer data</td></tr>'}
+        `).join('') || '<tr><td colspan="8">No customer data</td></tr>'}
       </tbody>
     </table>
   `;
+
+  document.querySelectorAll('.edit-customer-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        await openEditCustomerModal(button.dataset.customerId);
+      } catch (error) {
+        showAdminToast(error.message || 'Could not open customer edit modal.');
+      }
+    });
+  });
 }
 
 function renderCustomTable(custom) {
@@ -3646,6 +4333,11 @@ if (typeof module !== 'undefined' && module.exports) {
     mergeManualAddItemRow,
     renderManualOrderItems,
     renderManualAddItemRows,
+    extractDeliveryCatalogItems,
+    unwrapDeliveryPlansResponse,
+    applyLoadedDeliveryPlans,
+    loadAddDeliveryOrderForm,
+    retryManualDeliveryCatalog,
     get manualOrderMode() { return manualOrderMode; },
     set manualOrderMode(v) { manualOrderMode = v; },
     get manualOrderItems() { return manualOrderItems; },
@@ -3656,7 +4348,19 @@ if (typeof module !== 'undefined' && module.exports) {
     set manualOrderCatalog(v) { manualOrderCatalog = v; },
     get manualOrderProducts() { return manualOrderProducts; },
     set manualOrderProducts(v) { manualOrderProducts = v; },
+    get manualOrderDeliveryPlans() { return manualOrderDeliveryPlans; },
+    set manualOrderDeliveryPlans(v) { manualOrderDeliveryPlans = v; },
+    get manualOrderPlans() { return manualOrderPlans; },
+    set manualOrderPlans(v) { manualOrderPlans = v; },
+    renderManualOrderPlans,
+    populateManualPlanSelect,
+    updateManualOrderAmount,
     shiftDateKey,
-    loadTiffinPreparation
+    loadTiffinPreparation,
+    openEditCustomerModal,
+    closeEditCustomerModal,
+    renderCustomersTable,
+    get currentEditCustomerId() { return currentEditCustomerId; },
+    set currentEditCustomerId(v) { currentEditCustomerId = v; }
   };
 }

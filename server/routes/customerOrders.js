@@ -17,7 +17,12 @@ function serializeOrder(order) {
     pickupDate: formatDateKey(customerOrder.pickupDate),
     subscriptionStartDate: formatDateKey(customerOrder.subscriptionStartDate),
     subscriptionEndDate: formatDateKey(customerOrder.subscriptionEndDate),
-    deliveryStatusDate: formatDateKey(customerOrder.deliveryStatusDate)
+    deliveryStatusDate: formatDateKey(customerOrder.deliveryStatusDate),
+    customerFeedback: customerOrder.customerFeedback
+      ? (customerOrder.customerFeedback instanceof Map
+          ? Object.fromEntries(customerOrder.customerFeedback)
+          : customerOrder.customerFeedback)
+      : {}
   };
 }
 
@@ -61,6 +66,34 @@ router.put('/:id/cancel', customerAuthRequired, async (req, res) => {
     .lean();
   emitOrderUpdate(req.app, populated);
   res.json({ message: 'Order cancelled.', order: serializeOrder(populated) });
+});
+
+router.put('/:id/feedback', customerAuthRequired, async (req, res) => {
+  const { type, text } = req.body || {};
+  const VALID_TYPES = ['pickup', 'delivery'];
+  if (!VALID_TYPES.includes(type)) {
+    return res.status(400).json({ message: 'Component type must be pickup or delivery.' });
+  }
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) {
+    return res.status(400).json({ message: 'Feedback text cannot be empty.' });
+  }
+  if (trimmed.length > 1000) {
+    return res.status(400).json({ message: 'Feedback must be 1,000 characters or fewer.' });
+  }
+
+  const order = await Order.findOne({
+    _id: req.params.id,
+    $or: [{ customer: req.customer._id }, { customerId: req.customer._id }]
+  });
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+
+  if (!order.customerFeedback) order.customerFeedback = new Map();
+  order.customerFeedback.set(type, trimmed);
+  order.markModified('customerFeedback');
+  await order.save();
+
+  res.json({ message: 'Feedback saved.', feedback: { type, text: trimmed } });
 });
 
 module.exports = router;

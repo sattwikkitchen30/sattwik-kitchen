@@ -12,11 +12,17 @@ function loadController(overrides) {
       findById: overrides.findOrder || (() => ({ populate: async () => ({ ...overrides.savedOrder, toObject: () => ({ ...overrides.savedOrder }) }) })),
       deleteOne: overrides.deleteOrder
     },
-    '../models/Customer': { findById: async () => overrides.accountCustomer || ({ _id: overrides.customerId, firstName: 'Test', lastName: 'Customer', phone: '5551234567', email: 'test@example.com' }) },
+    '../models/Customer': { 
+      findById: async () => overrides.accountCustomer || ({ _id: overrides.customerId, firstName: 'Test', lastName: 'Customer', phone: '5551234567', email: 'test@example.com' }),
+      findOneAndUpdate: async () => ({ _id: overrides.customerId, firstName: 'Test', lastName: 'Customer', phone: '5551234567', email: 'test@example.com' })
+    },
     '../models/Product': {},
     '../models/TiffinSubscription': {
       findOneAndUpdate: overrides.saveSubscription,
-      deleteMany: overrides.deleteSubscriptions
+      deleteMany: overrides.deleteSubscriptions,
+      create: overrides.createTiffinSubscriptionsForOrder || (async () => []),
+      updateMany: async () => ({}),
+      updateOne: async () => ({})
     },
     '../models/DeliveryPlan': {
       find: overrides.findDeliveryPlans || (() => ({
@@ -32,9 +38,43 @@ function loadController(overrides) {
             }
           ]
         })
+      })),
+      findById: overrides.findDeliveryPlanById || (() => ({
+        lean: async () => overrides.deliveryPlan || null
+      })),
+      find: overrides.findDeliveryPlans || (() => ({
+        select: () => ({
+          lean: async () => overrides.deliveryPlans || []
+        })
       }))
     },
-    '../utils/orderEvents': { emitOrderUpdate: () => {} }
+    '../utils/orderEvents': { emitOrderUpdate: () => {} },
+    '../utils/deliveryCatalogItems': { 
+      normalizeItemKey: (v) => String(v || '').toLowerCase(), 
+      parseSizeToken: () => null,
+      getCanonicalIdentity: (item) => item?.productId ? `product:${String(item.productId)}` : item?.preparationType || '',
+      resolveCustomItem: (item) => ({
+        productId: null,
+        productName: item?.customName || item?.productName || '',
+        category: 'Tiffin Preparation',
+        preparationType: null,
+        itemKey: String(item?.customName || item?.productName || '').toLowerCase(),
+        size: null
+      }),
+      extractDeliveryCatalogItems: overrides.extractDeliveryCatalogItems || (() => [
+        { key: 'dal', name: 'Dal', sizes: ['small', 'medium', 'large'], supportsSize: true },
+        { key: 'curry', name: 'Curry', sizes: ['small', 'medium', 'large'], supportsSize: true },
+        { key: 'chapati', name: 'Chapati', sizes: [], supportsSize: false },
+        { key: 'rice', name: 'Rice', sizes: [], supportsSize: false },
+        { key: 'curd', name: 'Curd', sizes: ['small', 'big'], supportsSize: true }
+      ]),
+      resolveDeliveryCatalogSelection: (item) => ({
+        productId: null,
+        productName: item?.name || '',
+        category: 'Tiffin Preparation',
+        preparationType: null
+      })
+    }
   };
   const cached = new Map();
   for (const [request, exports] of Object.entries(dependencies)) {
@@ -831,4 +871,346 @@ test('repeated saves do not duplicate quantities or items', async () => {
   } finally {
     loaded.restore();
   }
+});
+
+
+test('manual order rejects invalid plan ID', async () => {
+  const invalidPlanId = 'invalid123';
+  const loaded = loadController({});
+  
+  const response = {
+    statusCode: 400,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+  
+  try {
+    await loaded.controller.createManualOrder({
+      body: {
+        firstName: 'Test',
+        lastName: 'Customer',
+        phone: '5551234567',
+        email: 'test@example.com',
+        items: [],
+        plans: [
+          { planId: invalidPlanId, packageType: 'full', size: 'couple', quantity: 1, price: 300 }
+        ],
+        amount: 300,
+        fulfillment: 'delivery',
+        address: '123 Test St',
+        pickupDate: '2026-10-12'
+      },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+  
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.body.message, 'Invalid plan ID.');
+});
+
+test('manual order accepts plans instead of items', async () => {
+  const planId = new mongoose.Types.ObjectId();
+  const loaded = loadController({
+    deliveryPlan: {
+      _id: planId,
+      category: 'Tiffin Plans',
+      packageType: 'full',
+      size: 'single',
+      displayName: 'Full Meal - Single',
+      price: 200,
+      active: true,
+      items: {
+        dal: 'small',
+        curry: 'small',
+        chapati: 2,
+        rice: 1,
+        curd: 'small'
+      }
+    },
+    createOrder: async (data) => ({
+      _id: new mongoose.Types.ObjectId(),
+      orderId: '26102000001',
+      ...data
+    }),
+    saveSubscription: async () => ({ _id: new mongoose.Types.ObjectId() }),
+    findOrder: () => ({
+      populate: async () => ({
+        _id: new mongoose.Types.ObjectId(),
+        orderId: '26102000001',
+        items: [],
+        tiffinItems: [],
+        toObject: () => ({
+          _id: new mongoose.Types.ObjectId(),
+          orderId: '26102000001',
+          items: [],
+          tiffinItems: []
+        })
+      })
+    })
+  });
+
+  const response = {
+    statusCode: 201,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.createManualOrder({
+      body: {
+        firstName: 'Test',
+        lastName: 'Customer',
+        phone: '5551234567',
+        email: 'test@example.com',
+        items: [], // No individual items
+        plans: [
+          { planId: String(planId), packageType: 'full', size: 'single', quantity: 1, price: 200 }
+        ],
+        amount: 200,
+        fulfillment: 'delivery',
+        address: '123 Test St',
+        pickupDate: '2026-10-20'
+      },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 201);
+  assert.ok(response.body.order);
+}
+
+test('getPayments returns payment history for an order', async () => {
+  const orderId = new mongoose.Types.ObjectId();
+  const customerId = new mongoose.Types.ObjectId();
+
+  const loaded = loadController({
+    findOrder: () => ({
+      populate: async () => ({
+        _id: orderId,
+        orderId: '26102000001',
+        totalAmount: 300,
+        customer: { firstName: 'Test', lastName: 'Customer' },
+        payments: [
+          { _id: new mongoose.Types.ObjectId(), amount: 100, paymentDate: new Date('2026-10-15'), method: 'Cash', notes: 'Partial payment', createdAt: new Date('2026-10-15T10:00:00Z') },
+          { _id: new mongoose.Types.ObjectId(), amount: 75, paymentDate: new Date('2026-10-18'), method: 'E-transfer', notes: 'Second payment', createdAt: new Date('2026-10-18T14:30:00Z') }
+        ],
+        toObject: () => ({
+          _id: orderId,
+          orderId: '26102000001',
+          totalAmount: 300,
+          customer: { firstName: 'Test', lastName: 'Customer' },
+          payments: [
+            { _id: new mongoose.Types.ObjectId(), amount: 100, paymentDate: new Date('2026-10-15'), method: 'Cash', notes: 'Partial payment', createdAt: new Date('2026-10-15T10:00:00Z') },
+            { _id: new mongoose.Types.ObjectId(), amount: 75, paymentDate: new Date('2026-10-18'), method: 'E-transfer', notes: 'Second payment', createdAt: new Date('2026-10-18T14:30:00Z') }
+          ]
+        })
+      })
+    })
+  });
+
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.getPayments({ params: { id: String(orderId) } }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.orderId, '26102000001');
+  assert.equal(response.body.totalAmount, 300);
+  assert.equal(response.body.totalPaid, 175);
+  assert.equal(response.body.outstandingBalance, 125);
+  assert.equal(response.body.payments.length, 2);
+  assert.equal(response.body.payments[0].amount, 75);
+  assert.equal(response.body.payments[1].amount, 100);
+});
+
+test('addPayment successfully records a payment', async () => {
+  const orderId = new mongoose.Types.ObjectId();
+  const savedPayments = [];
+
+  const loaded = loadController({
+    findOrder: () => ({
+      save: async function() {
+        savedPayments.push(...this.payments);
+        return this;
+      },
+      toObject: () => ({
+        _id: orderId,
+        orderId: '26102000001',
+        totalAmount: 300,
+        payments: savedPayments
+      })
+    }),
+    savedOrder: {
+      _id: orderId,
+      orderId: '26102000001',
+      totalAmount: 300,
+      payments: savedPayments
+    }
+  });
+
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.addPayment({
+      params: { id: String(orderId) },
+      body: { amount: 100, paymentDate: '2026-10-20', method: 'Cash', notes: 'Test payment' },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.message, 'Payment recorded successfully.');
+  assert.equal(response.body.payment.amount, 100);
+  assert.equal(response.body.totalPaid, 100);
+  assert.equal(response.body.outstandingBalance, 200);
+  assert.equal(savedPayments.length, 1);
+});
+
+test('addPayment rejects overpayment', async () => {
+  const orderId = new mongoose.Types.ObjectId();
+
+  const loaded = loadController({
+    findOrder: () => ({
+      totalAmount: 100,
+      payments: [{ amount: 80 }],
+      save: async () => this
+    })
+  });
+
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.addPayment({
+      params: { id: String(orderId) },
+      body: { amount: 50, paymentDate: '2026-10-20', method: 'Cash' },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 400);
+  assert.ok(response.body.message.includes('exceed the outstanding balance'));
+});
+
+test('addPayment rejects invalid amount', async () => {
+  const orderId = new mongoose.Types.ObjectId();
+
+  const loaded = loadController({
+    findOrder: () => ({
+      totalAmount: 100,
+      payments: [],
+      save: async () => this
+    })
+  });
+
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.addPayment({
+      params: { id: String(orderId) },
+      body: { amount: -10, paymentDate: '2026-10-20', method: 'Cash' },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 400);
+  assert.ok(response.body.message.includes('positive number'));
+});
+
+test('addPayment rejects invalid payment date', async () => {
+  const orderId = new mongoose.Types.ObjectId();
+
+  const loaded = loadController({
+    findOrder: () => ({
+      totalAmount: 100,
+      payments: [],
+      save: async () => this
+    })
+  });
+
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.addPayment({
+      params: { id: String(orderId) },
+      body: { amount: 50, paymentDate: 'invalid-date', method: 'Cash' },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 400);
+  assert.ok(response.body.message.includes('YYYY-MM-DD format'));
+});
+
+test('addPayment rejects invalid payment method', async () => {
+  const orderId = new mongoose.Types.ObjectId();
+
+  const loaded = loadController({
+    findOrder: () => ({
+      totalAmount: 100,
+      payments: [],
+      save: async () => this
+    })
+  });
+
+  const response = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  };
+
+  try {
+    await loaded.controller.addPayment({
+      params: { id: String(orderId) },
+      body: { amount: 50, paymentDate: '2026-10-20', method: 'InvalidMethod' },
+      app: { get: () => null }
+    }, response);
+  } finally {
+    loaded.restore();
+  }
+
+  assert.equal(response.statusCode, 400);
+  assert.ok(response.body.message.includes('Cash, E-transfer, Other'));
 });

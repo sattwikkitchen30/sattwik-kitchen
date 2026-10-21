@@ -7,6 +7,8 @@ router.post('/', customerAuthRequired, c.createOrder);
 router.post('/manual', authRequired, c.createManualOrder);
 router.get('/', authRequired, c.listOrders);
 router.get('/:id', authRequired, c.getOrder);
+router.get('/:id/payments', authRequired, c.getPayments);
+router.post('/:id/payments', authRequired, c.addPayment);
 router.put('/:id/amount', authRequired, c.updateAmount);
 router.put('/:id/tiffin-items', authRequired, c.updateTiffinItems);
 router.put('/:id/status', authRequired, c.updateStatus);

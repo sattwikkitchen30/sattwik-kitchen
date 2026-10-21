@@ -4,7 +4,7 @@ const ordersList = document.getElementById('ordersList');
 const ordersMessage = document.getElementById('ordersMessage');
 
 // Delivery subscription status tracker steps
-const deliveryStatusSteps = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'];
+const deliveryStatusSteps = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'EXPIRED'];
 
 if (!token) window.location.href = `/customer/login.html?return=${encodeURIComponent('/customer/orders.html')}`;
 
@@ -41,7 +41,8 @@ function statusLabel(status) {
     ACCEPTED: 'Accepted',
     OUT_FOR_DELIVERY: 'Out for Delivery',
     DELIVERED: 'Delivered',
-    CANCELLED: 'Cancelled'
+    CANCELLED: 'Cancelled',
+    EXPIRED: 'Expired'
   })[status] || String(status || '').replaceAll('_', ' ');
 }
 
@@ -216,7 +217,7 @@ function renderTimeline(steps, currentStatus) {
   const currentIndex = timelineSteps.indexOf(currentStatus);
   const finalIndex = currentIndex >= 0 ? currentIndex : 0;
   return `<div class="timeline">${timelineSteps.map((step, index) => {
-    const complete = index < finalIndex || (step === 'DELIVERED' && currentStatus === 'DELIVERED');
+    const complete = index < finalIndex || (step === 'DELIVERED' && currentStatus === 'DELIVERED') || (step === 'EXPIRED' && currentStatus === 'EXPIRED');
     const current = index === finalIndex && !complete;
     return `<div class="timeline-step ${complete ? 'complete' : ''} ${current ? 'current' : ''}"><div class="dot">${complete ? '✓' : current ? '●' : '○'}</div><span>${statusLabel(step)}</span></div>`;
   }).join('')}</div>`;
@@ -230,6 +231,40 @@ function renderPickupTimeline(status) {
     const current = index === currentIndex && !complete;
     return `<div class="timeline-step ${complete ? 'complete' : ''} ${current ? 'current' : ''}"><div class="dot">${complete ? '✓' : current ? '●' : '○'}</div><span>${pickupStatusLabel(step)}</span></div>`;
   }).join('')}</div>`;
+}
+
+// ─── Feedback section renderer ────────────────────────────────────────────────
+function renderFeedbackSection(component) {
+  const { type, order } = component;
+  const existing = (order.customerFeedback || {})[type] || '';
+  const safeId = `${order._id}-${type}`;
+  return `
+    <div class="feedback-section" data-feedback-id="${escapeHtml(safeId)}">
+      <p class="feedback-heading">Your Feedback</p>
+      <label class="feedback-label" for="feedback-textarea-${escapeHtml(safeId)}">
+        ${existing ? 'Edit your feedback:' : 'Share your feedback (optional):'}
+      </label>
+      <textarea
+        id="feedback-textarea-${escapeHtml(safeId)}"
+        class="feedback-textarea"
+        data-feedback-order="${escapeHtml(order._id)}"
+        data-feedback-type="${escapeHtml(type)}"
+        maxlength="1000"
+        rows="3"
+        placeholder="Write your feedback about this order..."
+        aria-label="Order feedback"
+      >${escapeHtml(existing)}</textarea>
+      <div class="feedback-meta">
+        <span class="feedback-char-count" aria-live="polite"><span class="feedback-count-num">${existing.length}</span>/1000</span>
+        <div class="feedback-actions">
+          <button type="button" class="feedback-save-btn" data-feedback-order="${escapeHtml(order._id)}" data-feedback-type="${escapeHtml(type)}">
+            ${existing ? 'Update Feedback' : 'Save Feedback'}
+          </button>
+        </div>
+      </div>
+      <div class="feedback-message" aria-live="polite"></div>
+    </div>
+  `;
 }
 
 // ─── Component card renderer ──────────────────────────────────────────────────
@@ -256,7 +291,8 @@ function renderComponent(component) {
       })();
 
   // ── Status badge class ──
-  const statusClass = status === 'DELIVERED' ? 'status-delivered'
+  const statusClass = status === 'EXPIRED' ? 'status-expired'
+    : status === 'DELIVERED' ? 'status-delivered'
     : status === 'CANCELLED' ? 'status-cancelled'
     : status === 'OUT_FOR_DELIVERY' ? 'status-out'
     : status === 'ACCEPTED' ? 'status-accepted'
@@ -358,6 +394,7 @@ function renderComponent(component) {
         ${deliveryAddressHtml}
         ${isPickup && !cancelDisabled ? `<div class="order-actions"><button type="button" class="cancel-order-btn" data-cancel-order="${escapeHtml(order._id)}" data-cancel-type="${escapeHtml(type)}">Cancel Order</button></div>` : ''}
         ${isPickup && cancelDisabled && showCancel && ['DELIVERED', 'CANCELLED'].includes(status) ? `<div class="order-actions"><button type="button" class="cancel-order-btn" disabled aria-disabled="true">Cancel Order</button></div>` : ''}
+        ${renderFeedbackSection(component)}
         <button type="button" class="details-toggle details-hide" aria-expanded="true" data-target="details-${escapeHtml(cardId)}">Hide details</button>
       </div>
     </article>
@@ -444,6 +481,73 @@ ordersList.addEventListener('click', (event) => {
   const cancelBtn = event.target.closest('[data-cancel-order]');
   if (!cancelBtn || cancelBtn.disabled) return;
   handleCancelOrder(cancelBtn);
+});
+
+// ─── Feedback char counter ────────────────────────────────────────────────────
+ordersList?.addEventListener('input', (event) => {
+  const textarea = event.target.closest('.feedback-textarea');
+  if (!textarea) return;
+  const section = textarea.closest('.feedback-section');
+  const countEl = section?.querySelector('.feedback-count-num');
+  if (countEl) countEl.textContent = textarea.value.length;
+});
+
+// ─── Feedback save ────────────────────────────────────────────────────────────
+ordersList?.addEventListener('click', async (event) => {
+  const saveBtn = event.target.closest('.feedback-save-btn');
+  if (!saveBtn || saveBtn.disabled) return;
+
+  const orderId = saveBtn.dataset.feedbackOrder;
+  const type = saveBtn.dataset.feedbackType;
+  const section = saveBtn.closest('.feedback-section');
+  const textarea = section?.querySelector('.feedback-textarea');
+  const messageEl = section?.querySelector('.feedback-message');
+  const labelEl = section?.querySelector('.feedback-label');
+  if (!textarea || !messageEl) return;
+
+  const text = textarea.value;
+
+  // Clear previous message
+  messageEl.textContent = '';
+  messageEl.className = 'feedback-message';
+
+  saveBtn.disabled = true;
+  const originalLabel = saveBtn.textContent.trim();
+  saveBtn.textContent = 'Saving…';
+
+  try {
+    const response = await fetch(`/api/customer-orders/${encodeURIComponent(orderId)}/feedback`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, text })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Could not save feedback.');
+
+    // Update UI from confirmed server response
+    const savedText = data.feedback?.text ?? text;
+    textarea.value = savedText;
+    if (section?.querySelector('.feedback-count-num')) {
+      section.querySelector('.feedback-count-num').textContent = savedText.length;
+    }
+    if (labelEl) labelEl.textContent = 'Edit your feedback:';
+    saveBtn.textContent = 'Update Feedback';
+    messageEl.textContent = 'Feedback saved!';
+    messageEl.classList.add('feedback-message-success');
+
+    // Update allComponents in-memory so tab switches preserve the saved feedback
+    const component = allComponents.find((c) => c.order._id === orderId && c.type === type);
+    if (component) {
+      if (!component.order.customerFeedback) component.order.customerFeedback = {};
+      component.order.customerFeedback[type] = savedText;
+    }
+  } catch (error) {
+    messageEl.textContent = error.message || 'Could not save feedback.';
+    messageEl.classList.add('feedback-message-error');
+    saveBtn.textContent = originalLabel;
+  } finally {
+    saveBtn.disabled = false;
+  }
 });
 
 async function handleCancelOrder(button) {

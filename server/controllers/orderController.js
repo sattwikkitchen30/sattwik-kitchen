@@ -70,7 +70,8 @@ async function createTiffinSubscriptionsForOrder(order, payload = {}) {
 
 async function syncTiffinSubscriptionStatus(order) {
   if (!order || order.type !== 'tiffin') return;
-  const status = order.status === 'CANCELLED' ? 'CANCELLED' : 'ACTIVE';
+  const status = order.status === 'CANCELLED' ? 'CANCELLED' : 
+                order.status === 'EXPIRED' ? 'EXPIRED' : 'ACTIVE';
   await TiffinSubscription.updateMany({ orderId: order._id }, { $set: { status } });
 }
 
@@ -330,6 +331,7 @@ async function createManualOrder(req, res) {
   const {
     firstName, lastName, phone, email,
     items: rawItems,
+    plans: rawPlans,
     amount, fulfillment, address = '', pickupDate: pickupDateValue
   } = req.body || {};
 
@@ -350,9 +352,6 @@ async function createManualOrder(req, res) {
 
   // ── Items validation ──────────────────────────────────────────────────────
   const itemsInput = Array.isArray(rawItems) ? rawItems : [];
-  if (!itemsInput.length) {
-    return res.status(400).json({ message: 'At least one item is required.' });
-  }
   if (itemsInput.length > 50) {
     return res.status(400).json({ message: 'An order can contain at most 50 items.' });
   }
@@ -364,6 +363,40 @@ async function createManualOrder(req, res) {
     if (!item?.productName || !String(item.productName).trim()) {
       return res.status(400).json({ message: 'Each item must have a product name.' });
     }
+  }
+
+  // ── Plans validation ────────────────────────────────────────────────────────
+  const plansInput = Array.isArray(rawPlans) ? rawPlans : [];
+  if (plansInput.length > 10) {
+    return res.status(400).json({ message: 'An order can contain at most 10 subscription plans.' });
+  }
+  
+  // Require at least one item or one plan
+  if (!itemsInput.length && !plansInput.length) {
+    return res.status(400).json({ message: 'Add at least one item or subscription plan.' });
+  }
+  
+  // Validate and fetch delivery plans
+  const DeliveryPlan = require('../models/DeliveryPlan');
+  const validatedPlans = [];
+  for (const planInput of plansInput) {
+    const qty = parseInt(planInput?.quantity, 10);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 99) {
+      return res.status(400).json({ message: 'Each plan quantity must be between 1 and 99.' });
+    }
+    if (!planInput?.planId || !/^[a-fA-F0-9]{24}$/.test(String(planInput.planId))) {
+      return res.status(400).json({ message: 'Invalid plan ID.' });
+    }
+    
+    const plan = await DeliveryPlan.findById(planInput.planId).lean();
+    if (!plan || plan.active === false) {
+      return res.status(400).json({ message: `Plan not found or inactive.` });
+    }
+    
+    validatedPlans.push({
+      plan,
+      quantity: qty
+    });
   }
 
   // ── Date validation ───────────────────────────────────────────────────────
@@ -379,6 +412,28 @@ async function createManualOrder(req, res) {
   // ── Build order items: stock-check and decrement pickup products ──────────
   const orderItems = [];
   const stockChanges = new Map(); // productId -> quantity decremented (for rollback)
+  
+  // ── Add subscription plan items to order items ───────────────────────────
+  for (const { plan, quantity: planQty } of validatedPlans) {
+    const planName = plan.displayName || plan.size;
+    const packageLabel = plan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal';
+    const sizeLabel = plan.size.charAt(0).toUpperCase() + plan.size.slice(1);
+    const productName = `${packageLabel} (${sizeLabel})`;
+    
+    orderItems.push({
+      productId: null,
+      productName,
+      category: plan.category || 'Tiffin Plans',
+      fulfillment: 'delivery',
+      deliveryStatus: 'PENDING',
+      priceAtPurchase: Number(plan.price),
+      quantity: planQty,
+      subtotal: Math.round(Number(plan.price) * planQty * 100) / 100,
+      preparationType: null,
+      itemKey: null,
+      size: null
+    });
+  }
 
   try {
     for (const raw of itemsInput) {
@@ -471,7 +526,16 @@ async function createManualOrder(req, res) {
   }
 
   let detectedTiffinPlan = null;
-  if (hasDelivery) {
+  if (hasDelivery && validatedPlans.length > 0) {
+    // Use the first validated plan (for mixed orders, this represents the primary plan)
+    const primaryPlan = validatedPlans[0].plan;
+    detectedTiffinPlan = {
+      packageType: primaryPlan.packageType,
+      size: primaryPlan.size,
+      price: Number(primaryPlan.price)
+    };
+  } else if (hasDelivery) {
+    // Fallback to regex detection for backward compatibility with orders created without explicit plans
     for (const item of orderItems) {
       const match = String(item.productName || '').match(/(Full\s*Meal|Curry(?:-|\s*)Only)(?:\s+Package)?(?:\s*\(|\s*[-—–:]\s*)(Single|Couple|Family)\)?/i);
       if (match) {
@@ -485,7 +549,10 @@ async function createManualOrder(req, res) {
     }
   }
 
-  const deliveryTiffinItems = hasDelivery ? buildOrderTiffinItems(orderItems, detectedTiffinPlan) : undefined;
+  // Combine plan preparation items with individual delivery items for Tiffin Preparation
+  const allDeliveryItems = [...orderItems.filter(item => item.fulfillment === 'delivery')];
+
+  const deliveryTiffinItems = hasDelivery ? buildOrderTiffinItems(allDeliveryItems, detectedTiffinPlan) : undefined;
 
   let order;
   try {
@@ -528,6 +595,19 @@ async function createManualOrder(req, res) {
     if (updatedProduct) {
       req.app.get('io')?.emit('product:stockUpdated', { productId: updatedProduct._id, stock: updatedProduct.stock, product: updatedProduct });
     }
+  }
+
+  // ── Create TiffinSubscriptions for validated plans ────────────────────────
+  if (validatedPlans.length > 0) {
+    const tiffinPlansPayload = validatedPlans.map(({ plan, quantity: planQty }) => ({
+      packageType: plan.packageType,
+      size: plan.size,
+      quantity: planQty,
+      startDate: subscriptionDates?.startDate,
+      endDate: subscriptionDates?.endDate
+    }));
+    
+    await createTiffinSubscriptionsForOrder(order, { tiffinPlans: tiffinPlansPayload });
   }
 
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area');
@@ -866,6 +946,12 @@ async function getOrder(req, res) {
   responseOrder.subscriptionStartDate = formatDateKey(order.subscriptionStartDate);
   responseOrder.subscriptionEndDate = formatDateKey(order.subscriptionEndDate);
   responseOrder.deliveryStatusDate = formatDateKey(order.deliveryStatusDate);
+  // Normalize customerFeedback Map to plain object for the admin response
+  if (responseOrder.customerFeedback instanceof Map) {
+    responseOrder.customerFeedback = Object.fromEntries(responseOrder.customerFeedback);
+  } else if (!responseOrder.customerFeedback) {
+    responseOrder.customerFeedback = {};
+  }
   res.json({ order: responseOrder });
 }
 
@@ -1399,4 +1485,134 @@ async function deleteOrder(req, res) {
   res.json({ message: 'Order deleted' });
 }
 
-module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateAmount, updateTiffinItems, updateStatus, deleteOrder, assignDeliveryMember, updatePickupDate, updateTiffinEndDate };
+async function getPayments(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid order ID.' });
+  }
+
+  const order = await Order.findById(req.params.id).populate('customer', 'firstName lastName');
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+
+  const payments = (order.payments || []).map((payment) => ({
+    _id: payment._id,
+    amount: payment.amount,
+    paymentDate: payment.paymentDate,
+    method: payment.method,
+    notes: payment.notes,
+    createdAt: payment.createdAt
+  }));
+
+  const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const outstandingBalance = Math.max(0, (order.totalAmount || 0) - totalPaid);
+
+  res.json({
+    orderId: order.orderId,
+    customerName: order.customer ? `${order.customer.firstName} ${order.customer.lastName}`.trim() : '—',
+    totalAmount: order.totalAmount,
+    totalPaid,
+    outstandingBalance,
+    payments: payments.sort((a, b) => {
+      const dateA = new Date(a.paymentDate || 0);
+      const dateB = new Date(b.paymentDate || 0);
+      if (dateA.getTime() !== dateB.getTime()) {
+        return dateB.getTime() - dateA.getTime();
+      }
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    })
+  });
+}
+
+async function addPayment(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid order ID.' });
+  }
+
+  const { amount, paymentDate, method, notes } = req.body || {};
+
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ message: 'Payment amount must be a positive number.' });
+  }
+
+  if (!paymentDate || typeof paymentDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+    return res.status(400).json({ message: 'Payment date is required and must be in YYYY-MM-DD format.' });
+  }
+
+  const validMethods = ['Cash', 'E-transfer', 'Other'];
+  if (!method || !validMethods.includes(method)) {
+    return res.status(400).json({ message: 'Payment method must be one of: Cash, E-transfer, Other.' });
+  }
+
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+
+  const currentTotalPaid = (order.payments || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+  const newTotalPaid = currentTotalPaid + amount;
+  const roundedAmount = Math.round((amount + Number.EPSILON) * 100) / 100;
+
+  if (newTotalPaid > order.totalAmount) {
+    return res.status(400).json({
+      message: `Payment amount would exceed the outstanding balance. Current paid: $${currentTotalPaid.toFixed(2)}, Order total: $${order.totalAmount.toFixed(2)}`
+    });
+  }
+
+  const parsedPaymentDate = new Date(paymentDate);
+  if (Number.isNaN(parsedPaymentDate.getTime())) {
+    return res.status(400).json({ message: 'Invalid payment date.' });
+  }
+
+  const lastPayment = (order.payments || []).length > 0 ? order.payments[order.payments.length - 1] : null;
+  if (lastPayment) {
+    const lastPaymentTime = new Date(lastPayment.createdAt || 0);
+    const timeDiff = Date.now() - lastPaymentTime.getTime();
+    if (timeDiff < 5000 &&
+        Math.abs(lastPayment.amount - roundedAmount) < 0.01 &&
+        lastPayment.method === method &&
+        new Date(lastPayment.paymentDate).getTime() === parsedPaymentDate.getTime()) {
+      return res.status(400).json({ message: 'Duplicate payment detected. A payment with the same details was just recorded.' });
+    }
+  }
+
+  const newPayment = {
+    amount: roundedAmount,
+    paymentDate: parsedPaymentDate,
+    method,
+    notes: String(notes || '').trim().slice(0, 500),
+    createdAt: new Date()
+  };
+
+  order.payments = order.payments || [];
+  order.payments.push(newPayment);
+  await order.save();
+
+  emitOrderUpdate(req.app, order);
+
+  const updatedPayments = order.payments.map((payment) => ({
+    _id: payment._id,
+    amount: payment.amount,
+    paymentDate: payment.paymentDate,
+    method: payment.method,
+    notes: payment.notes,
+    createdAt: payment.createdAt
+  }));
+
+  const updatedTotalPaid = updatedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const updatedOutstandingBalance = Math.max(0, (order.totalAmount || 0) - updatedTotalPaid);
+
+  res.json({
+    message: 'Payment recorded successfully.',
+    payment: newPayment,
+    totalAmount: order.totalAmount,
+    totalPaid: updatedTotalPaid,
+    outstandingBalance: updatedOutstandingBalance,
+    payments: updatedPayments.sort((a, b) => {
+      const dateA = new Date(a.paymentDate || 0);
+      const dateB = new Date(b.paymentDate || 0);
+      if (dateA.getTime() !== dateB.getTime()) {
+        return dateB.getTime() - dateA.getTime();
+      }
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    })
+  });
+}
+
+module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateAmount, updateTiffinItems, updateStatus, deleteOrder, assignDeliveryMember, updatePickupDate, updateTiffinEndDate, getPayments, addPayment };

@@ -34,6 +34,14 @@ const customerSnapshotSchema = new mongoose.Schema({
   area: { type: String, trim: true, default: '' }
 }, { _id: false });
 
+const paymentSchema = new mongoose.Schema({
+  amount: { type: Number, required: true, min: 0 },
+  paymentDate: { type: Date, required: true },
+  method: { type: String, required: true, enum: ['Cash', 'E-transfer', 'Other'] },
+  notes: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+}, { _id: true });
+
 const orderSchema = new mongoose.Schema({
   orderId: { type: String, unique: true, index: true },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
@@ -53,7 +61,9 @@ const orderSchema = new mongoose.Schema({
     price: { type: Number, default: null }
   },
   customRequest: { type: String, default: '' },
+  customerFeedback: { type: Map, of: String, default: undefined },
   totalAmount: { type: Number, required: true, min: 0 },
+  payments: { type: [paymentSchema], default: [] },
   deliveryAddress: { type: String, default: '' },
   deliveryMemberId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryMember', default: null },
   placedAt: { type: Date, default: Date.now },

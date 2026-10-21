@@ -28,6 +28,35 @@ async function resetDeliveredOrders(Order, { now = new Date(), app } = {}) {
     const serviceDate = getCurrentServiceDate(order, now);
     if (!serviceDate || formatDateKey(serviceDate) !== todayKey) continue;
 
+    // Check if this is the final service day
+    const endDate = order.subscriptionEndDate;
+    const endDateKey = endDate ? formatDateKey(endDate) : null;
+    const isFinalDay = endDateKey && todayKey === endDateKey;
+
+    // If this is the final service day and it's delivered, mark subscription as expired
+    // instead of resetting to ACCEPTED
+    if (isFinalDay) {
+      const updatedOrder = await Order.findOneAndUpdate({
+        _id: order._id,
+        status: order.status,
+        deliveryStatusDate: order.deliveryStatusDate ?? null
+      }, {
+        $set: {
+          status: 'EXPIRED',
+          deliveryStatusDate: today,
+          'items.$[delivery].deliveryStatus': 'DELIVERED'
+        }
+      }, {
+        new: true,
+        runValidators: true,
+        arrayFilters: [{ 'delivery.fulfillment': 'delivery' }]
+      }).lean();
+      if (!updatedOrder) continue;
+      resetCount += 1;
+      if (app) emitOrderUpdate(app, updatedOrder);
+      continue;
+    }
+
     const updatedOrder = await Order.findOneAndUpdate({
       _id: order._id,
       status: order.status,

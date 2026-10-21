@@ -1336,6 +1336,152 @@ if (typeof document !== 'undefined' && document.addEventListener) {
   }
 }
 
+/* Full-screen image viewer for catering photos */
+let cateringImageViewerScrollY = 0;
+let lastActiveElementBeforeViewer = null;
+
+function ensureImageViewerElements() {
+  if (typeof document === 'undefined') return { viewer: null, img: null, closeBtn: null };
+
+  let viewer = document.getElementById('imageViewer');
+  if (!viewer) {
+    viewer = document.createElement('div');
+    viewer.id = 'imageViewer';
+    viewer.className = 'image-viewer';
+    viewer.setAttribute('aria-hidden', 'true');
+    viewer.setAttribute('role', 'dialog');
+    viewer.setAttribute('aria-modal', 'true');
+    viewer.setAttribute('aria-label', 'Catering photo viewer');
+    viewer.hidden = true;
+    viewer.innerHTML = [
+      '<button id="imageViewerClose" class="image-viewer-close" type="button" aria-label="Close image viewer">&times;</button>',
+      '<div class="image-viewer-content">',
+      '  <img id="imageViewerImg" class="image-viewer-img" src="" alt="Catering photo" />',
+      '</div>'
+    ].join('\n');
+    document.body.appendChild(viewer);
+  }
+  return {
+    viewer,
+    img: viewer.querySelector('#imageViewerImg') || document.getElementById('imageViewerImg'),
+    closeBtn: viewer.querySelector('#imageViewerClose') || document.getElementById('imageViewerClose')
+  };
+}
+
+function openImageViewer(imgSrc, altText) {
+  if (!imgSrc || typeof document === 'undefined') return;
+  const { viewer, img, closeBtn } = ensureImageViewerElements();
+  if (!viewer || !img) return;
+
+  lastActiveElementBeforeViewer = document.activeElement;
+  cateringImageViewerScrollY = (typeof window !== 'undefined' ? (window.pageYOffset || document.documentElement.scrollTop) : 0) || 0;
+
+  img.src = imgSrc;
+  img.alt = altText || 'Sattwik Kitchen catering photo';
+  viewer.hidden = false;
+  viewer.classList.add('open');
+  viewer.setAttribute('aria-hidden', 'false');
+
+  if (document.body) {
+    document.body.style.overflow = 'hidden';
+  }
+
+  if (closeBtn && typeof closeBtn.focus === 'function') {
+    setTimeout(() => {
+      try { closeBtn.focus(); } catch (_) {}
+    }, 50);
+  }
+}
+
+function closeImageViewer() {
+  if (typeof document === 'undefined') return;
+  const viewer = document.getElementById('imageViewer');
+  if (!viewer) return;
+
+  const img = viewer.querySelector('#imageViewerImg') || document.getElementById('imageViewerImg');
+  viewer.classList.remove('open');
+  viewer.setAttribute('aria-hidden', 'true');
+  viewer.hidden = true;
+  if (img) img.src = '';
+
+  if (document.body) {
+    document.body.style.overflow = '';
+  }
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+    window.scrollTo(0, cateringImageViewerScrollY);
+  }
+
+  if (lastActiveElementBeforeViewer && typeof lastActiveElementBeforeViewer.focus === 'function') {
+    try { lastActiveElementBeforeViewer.focus(); } catch (_) {}
+  }
+}
+
+let cateringViewerInitialized = false;
+function initCateringImageViewer() {
+  if (typeof document === 'undefined' || cateringViewerInitialized) return;
+  cateringViewerInitialized = true;
+
+  const { viewer, closeBtn } = ensureImageViewerElements();
+
+  closeBtn?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeImageViewer();
+  });
+
+  // Clicking backdrop / content area outside the image closes viewer
+  viewer?.addEventListener('click', (event) => {
+    if (event.target && (event.target.id === 'imageViewerImg' || (event.target.closest && event.target.closest('#imageViewerImg')))) {
+      return; // Do not close if clicking the image itself
+    }
+    closeImageViewer();
+  });
+
+  // Escape key closes viewer
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      const v = document.getElementById('imageViewer');
+      if (v && (v.getAttribute('aria-hidden') === 'false' || v.classList.contains('open')) && !v.hidden) {
+        closeImageViewer();
+      }
+    }
+  });
+
+  // Event delegation on document for all catering photos (static or dynamically loaded)
+  document.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!target) return;
+
+    // Ignore clicks inside the open viewer
+    if (target.closest && target.closest('#imageViewer')) {
+      return;
+    }
+
+    let cateringImg = null;
+    if (target.tagName === 'IMG' && target.closest && target.closest('.catering, #catering')) {
+      cateringImg = target;
+    } else if (target.closest) {
+      const container = target.closest('.catering-visual, .catering-panel, .catering, #catering');
+      if (container) {
+        cateringImg = target.tagName === 'IMG' ? target : container.querySelector('img');
+      }
+    }
+
+    if (cateringImg && cateringImg.tagName === 'IMG') {
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      const src = cateringImg.currentSrc || cateringImg.getAttribute('src') || cateringImg.src;
+      openImageViewer(src, cateringImg.alt);
+    }
+  });
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCateringImageViewer);
+  } else {
+    initCateringImageViewer();
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     cart,
@@ -1350,6 +1496,10 @@ if (typeof module !== 'undefined' && module.exports) {
     toggleProductDescription,
     initStaticProductDescriptions,
     createProductCard,
-    PRODUCT_DESCRIPTION_MAX_CHARS
+    PRODUCT_DESCRIPTION_MAX_CHARS,
+    openImageViewer,
+    closeImageViewer,
+    ensureImageViewerElements,
+    initCateringImageViewer
   };
 }

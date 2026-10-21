@@ -72,71 +72,19 @@ function approvedPickupItemsExpression() {
 }
 
 function revenueExpression() {
-  const items = { $ifNull: ['$items', []] };
-  const deliveryItems = {
-    $filter: {
-      input: items,
-      as: 'item',
-      cond: { $eq: [{ $ifNull: ['$$item.fulfillment', 'pickup'] }, 'delivery'] }
-    }
-  };
-  const pickupItems = approvedPickupItemsExpression();
-  const allItemTotal = { $sum: { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
-  const deliveryItemTotal = { $sum: { $map: { input: deliveryItems, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
-  const pickupItemTotal = { $sum: { $map: { input: pickupItems, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
-  const hasPickupItems = { $in: ['pickup', { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.fulfillment', 'pickup'] } } }] };
-  const hasDeliveryItems = { $in: ['delivery', { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.fulfillment', 'pickup'] } } }] };
-  const amountAdjustment = { $subtract: [{ $ifNull: ['$totalAmount', 0] }, allItemTotal] };
-  const deliveryRevenue = {
-    $cond: [
-      hasEverBeenDeliveredExpression(),
-      {
-        $cond: [
-          { $eq: [{ $size: items }, 0] },
-          '$totalAmount',
-          {
-            $add: [
-              deliveryItemTotal,
-                { $cond: [hasDeliveryItems, amountAdjustment, 0] }
-            ]
-          }
-        ]
-      },
-      0
-    ]
-  };
-  const pickupRevenue = {
-    $add: [
-      pickupItemTotal,
-      { $cond: [{ $and: [hasPickupItems, { $eq: [hasDeliveryItems, false] }, { $gt: [{ $size: pickupItems }, 0] }] }, amountAdjustment, 0] }
-    ]
-  };
-  return { $max: [0, { $add: [deliveryRevenue, pickupRevenue] }] };
+  const payments = { $ifNull: ['$payments', []] };
+  const totalPaid = { $sum: { $map: { input: payments, as: 'payment', in: { $ifNull: ['$$payment.amount', 0] } } } };
+  return { $max: [0, totalPaid] };
 }
 
 function revenueEligibleItemsExpression() {
   const items = { $ifNull: ['$items', []] };
-  const eligibleItems = {
-    $filter: {
-      input: items,
-      as: 'item',
-      cond: {
-        $or: [
-          approvedPickupItemExpression(),
-          {
-            $and: [
-              { $eq: [{ $ifNull: ['$$item.fulfillment', 'pickup'] }, 'delivery'] },
-              hasEverBeenDeliveredExpression()
-            ]
-          }
-        ]
-      }
-    }
-  };
+  const payments = { $ifNull: ['$payments', []] };
+  const totalPaid = { $sum: { $map: { input: payments, as: 'payment', in: { $ifNull: ['$$payment.amount', 0] } } } };
   const allItemTotal = { $sum: { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
   return {
     $map: {
-      input: eligibleItems,
+      input: items,
       as: 'item',
       in: {
         $mergeObjects: [
@@ -147,7 +95,7 @@ function revenueEligibleItemsExpression() {
                 { $gt: [allItemTotal, 0] },
                 {
                   $multiply: [
-                    { $ifNull: ['$totalAmount', 0] },
+                    totalPaid,
                     { $divide: [{ $ifNull: ['$$item.subtotal', 0] }, allItemTotal] }
                   ]
                 },
@@ -241,10 +189,11 @@ async function revenue(req, res) {
 
   const rows = await Order.aggregate([
     ...basePipeline(req.query),
+    { $unwind: { path: '$payments', preserveNullAndEmptyArrays: true } },
     {
       $group: {
-        _id: { $dateToString: { format, date: '$createdAt', timezone } },
-        revenue: { $sum: revenueExpression() },
+        _id: { $dateToString: { format, date: '$payments.paymentDate', timezone } },
+        revenue: { $sum: { $ifNull: ['$payments.amount', 0] } },
         orders: { $sum: 1 }
       }
     },

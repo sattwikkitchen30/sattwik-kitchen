@@ -6,7 +6,7 @@ const itemSchema = new mongoose.Schema({
   productName: { type: String, required: true },
   category: { type: String, default: 'General' },
   fulfillment: { type: String, enum: ['pickup', 'delivery'], default: 'pickup' },
-  deliveryStatus: { type: String, enum: ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'], default: null },
+  deliveryStatus: { type: String, enum: ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'EXPIRED'], default: null },
   priceAtPurchase: { type: Number, required: true, min: 0 },
   quantity: { type: Number, required: true, min: 1 },
   subtotal: { type: Number, required: true, min: 0 }
@@ -42,6 +42,16 @@ const paymentSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 
+const commentSchema = new mongoose.Schema({
+  orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true },
+  fulfillment: { type: String, enum: ['pickup', 'delivery'], required: true, default: 'delivery' },
+  authorType: { type: String, enum: ['admin', 'customer'], required: true },
+  authorId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  authorName: { type: String, default: '' },
+  text: { type: String, required: true, maxlength: 2000 },
+  createdAt: { type: Date, default: Date.now }
+}, { _id: true });
+
 const orderSchema = new mongoose.Schema({
   orderId: { type: String, unique: true, index: true },
   customer: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true },
@@ -62,6 +72,7 @@ const orderSchema = new mongoose.Schema({
   },
   customRequest: { type: String, default: '' },
   customerFeedback: { type: Map, of: String, default: undefined },
+  comments: { type: [commentSchema], default: [] },
   totalAmount: { type: Number, required: true, min: 0 },
   payments: { type: [paymentSchema], default: [] },
   deliveryAddress: { type: String, default: '' },

@@ -98,7 +98,7 @@ function getDeliveryStatus(order) {
  * subscription window has ended.
  */
 function isSubscriptionFullyComplete(order) {
-  if (getDeliveryStatus(order) !== 'DELIVERED') return false;
+  if (getDeliveryStatus(order) !== 'DELIVERED' && getDeliveryStatus(order) !== 'EXPIRED') return false;
   // Extra guard: if there are future service dates, don't treat as complete.
   const endDate = order.subscriptionEndDate;
   if (!endDate) return true;
@@ -153,7 +153,7 @@ function componentAmount(order, fulfillmentType) {
 function classifyComponent(component) {
   const status = String(component?.status || '').toUpperCase();
   if (status === 'CANCELLED') return 'cancelled';
-  if (status === 'DELIVERED') return 'delivered';
+  if (status === 'DELIVERED' || status === 'EXPIRED') return 'delivered';
   return 'ongoing';
 }
 
@@ -233,32 +233,90 @@ function renderPickupTimeline(status) {
   }).join('')}</div>`;
 }
 
-// ─── Feedback section renderer ────────────────────────────────────────────────
+// ─── Feedback & Comments section renderer ────────────────────────────────────
+function getCustomerOrderComments(order, type) {
+  if (!order) return [];
+  const rawComments = Array.isArray(order.comments) ? order.comments : [];
+  const comments = rawComments.filter((c) => !type || c.fulfillment === type).map((c) => ({ ...c }));
+
+  // Check legacy customerFeedback
+  const fb = order.customerFeedback || {};
+  const legacyText = typeof fb === 'object' ? (fb[type] || '') : '';
+  if (legacyText && legacyText.trim()) {
+    const trimmed = legacyText.trim();
+    const alreadyPresent = comments.some(
+      (c) => c.fulfillment === type && c.authorType === 'customer' && String(c.text || '').trim() === trimmed
+    );
+    if (!alreadyPresent) {
+      comments.unshift({
+        _id: 'legacy-cust-' + (order._id || '0') + '-' + type,
+        orderId: order._id,
+        fulfillment: type,
+        authorType: 'customer',
+        authorName: 'You',
+        text: trimmed,
+        createdAt: order.updatedAt || order.createdAt || new Date().toISOString()
+      });
+    }
+  }
+
+  comments.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return comments;
+}
+
 function renderFeedbackSection(component) {
   const { type, order } = component;
   const existing = (order.customerFeedback || {})[type] || '';
+  const comments = getCustomerOrderComments(order, type);
   const safeId = `${order._id}-${type}`;
+
+  const conversationHtml = comments.length
+    ? `<div class="customer-comments-conversation" id="comments-conv-${escapeHtml(safeId)}">
+        ${comments.map((c) => {
+          const isAdmin = c.authorType === 'admin';
+          const authorBadge = isAdmin ? 'badge-admin' : 'badge-customer';
+          const bubbleClass = isAdmin ? 'comment-from-admin' : 'comment-from-customer';
+          const authorName = isAdmin ? 'Admin' : 'You';
+          const timeStr = c.createdAt
+            ? new Date(c.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Vancouver' })
+            : '';
+          return `
+            <div class="customer-comment-bubble ${bubbleClass}">
+              <div class="comment-bubble-meta">
+                <span class="comment-author ${authorBadge}">${escapeHtml(authorName)}</span>
+                <span class="comment-time">${escapeHtml(timeStr)}</span>
+              </div>
+              <div class="comment-text">${escapeHtml(c.text)}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>`
+    : `<div class="customer-comments-conversation" id="comments-conv-${escapeHtml(safeId)}">
+        <p class="comments-empty-notice">No comments yet. Share your feedback or comment below.</p>
+      </div>`;
+
   return `
-    <div class="feedback-section" data-feedback-id="${escapeHtml(safeId)}">
-      <p class="feedback-heading">Your Feedback</p>
+    <div class="feedback-section order-comments-section" data-feedback-id="${escapeHtml(safeId)}">
+      <p class="feedback-heading">Order Comments & Feedback</p>
+      ${conversationHtml}
       <label class="feedback-label" for="feedback-textarea-${escapeHtml(safeId)}">
-        ${existing ? 'Edit your feedback:' : 'Share your feedback (optional):'}
+        ${comments.length ? 'Add a comment:' : (existing ? 'Edit your feedback:' : 'Share your feedback (optional):')}
       </label>
       <textarea
         id="feedback-textarea-${escapeHtml(safeId)}"
         class="feedback-textarea"
         data-feedback-order="${escapeHtml(order._id)}"
         data-feedback-type="${escapeHtml(type)}"
-        maxlength="1000"
+        maxlength="2000"
         rows="3"
-        placeholder="Write your feedback about this order..."
+        placeholder="Write your feedback or comment about this order..."
         aria-label="Order feedback"
-      >${escapeHtml(existing)}</textarea>
+      ></textarea>
       <div class="feedback-meta">
-        <span class="feedback-char-count" aria-live="polite"><span class="feedback-count-num">${existing.length}</span>/1000</span>
+        <span class="feedback-char-count" aria-live="polite"><span class="feedback-count-num">0</span>/2000</span>
         <div class="feedback-actions">
-          <button type="button" class="feedback-save-btn" data-feedback-order="${escapeHtml(order._id)}" data-feedback-type="${escapeHtml(type)}">
-            ${existing ? 'Update Feedback' : 'Save Feedback'}
+          <button type="button" class="feedback-save-btn comment-send-btn" data-feedback-order="${escapeHtml(order._id)}" data-feedback-type="${escapeHtml(type)}">
+            Send Comment
           </button>
         </div>
       </div>
@@ -492,7 +550,7 @@ ordersList?.addEventListener('input', (event) => {
   if (countEl) countEl.textContent = textarea.value.length;
 });
 
-// ─── Feedback save ────────────────────────────────────────────────────────────
+// ─── Feedback & Comments save ────────────────────────────────────────────────
 ordersList?.addEventListener('click', async (event) => {
   const saveBtn = event.target.closest('.feedback-save-btn');
   if (!saveBtn || saveBtn.disabled) return;
@@ -503,50 +561,81 @@ ordersList?.addEventListener('click', async (event) => {
   const textarea = section?.querySelector('.feedback-textarea');
   const messageEl = section?.querySelector('.feedback-message');
   const labelEl = section?.querySelector('.feedback-label');
+  const convList = section?.querySelector('.customer-comments-conversation');
   if (!textarea || !messageEl) return;
 
-  const text = textarea.value;
+  const text = textarea.value.trim();
 
   // Clear previous message
   messageEl.textContent = '';
   messageEl.className = 'feedback-message';
 
+  if (!text) {
+    messageEl.textContent = 'Feedback text cannot be empty.';
+    messageEl.classList.add('feedback-message-error');
+    return;
+  }
+  if (text.length > 2000) {
+    messageEl.textContent = 'Comment must be 2,000 characters or fewer.';
+    messageEl.classList.add('feedback-message-error');
+    return;
+  }
+
   saveBtn.disabled = true;
   const originalLabel = saveBtn.textContent.trim();
-  saveBtn.textContent = 'Saving…';
+  saveBtn.textContent = 'Sending…';
 
   try {
-    const response = await fetch(`/api/customer-orders/${encodeURIComponent(orderId)}/feedback`, {
-      method: 'PUT',
+    const response = await fetch(`/api/customer-orders/${encodeURIComponent(orderId)}/comments`, {
+      method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, text })
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || 'Could not save feedback.');
 
-    // Update UI from confirmed server response
-    const savedText = data.feedback?.text ?? text;
-    textarea.value = savedText;
+    textarea.value = '';
     if (section?.querySelector('.feedback-count-num')) {
-      section.querySelector('.feedback-count-num').textContent = savedText.length;
+      section.querySelector('.feedback-count-num').textContent = '0';
     }
-    if (labelEl) labelEl.textContent = 'Edit your feedback:';
-    saveBtn.textContent = 'Update Feedback';
-    messageEl.textContent = 'Feedback saved!';
+    if (labelEl) labelEl.textContent = 'Add a comment:';
+    saveBtn.textContent = 'Send Comment';
+    messageEl.textContent = 'Comment sent!';
     messageEl.classList.add('feedback-message-success');
 
     // Update allComponents in-memory so tab switches preserve the saved feedback
     const component = allComponents.find((c) => c.order._id === orderId && c.type === type);
     if (component) {
+      if (!component.order.comments) component.order.comments = [];
+      if (data.comment) component.order.comments.push(data.comment);
       if (!component.order.customerFeedback) component.order.customerFeedback = {};
-      component.order.customerFeedback[type] = savedText;
+      component.order.customerFeedback[type] = text;
+    }
+
+    // Append to conversation DOM
+    if (convList) {
+      const emptyNotice = convList.querySelector('.comments-empty-notice');
+      if (emptyNotice) emptyNotice.remove();
+
+      const timeStr = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Vancouver' });
+      const bubble = document.createElement('div');
+      bubble.className = 'customer-comment-bubble comment-from-customer';
+      bubble.innerHTML = `
+        <div class="comment-bubble-meta">
+          <span class="comment-author badge-customer">You</span>
+          <span class="comment-time">${escapeHtml(timeStr)}</span>
+        </div>
+        <div class="comment-text">${escapeHtml(text)}</div>
+      `;
+      convList.appendChild(bubble);
+      convList.scrollTop = convList.scrollHeight;
     }
   } catch (error) {
     messageEl.textContent = error.message || 'Could not save feedback.';
     messageEl.classList.add('feedback-message-error');
-    saveBtn.textContent = originalLabel;
   } finally {
     saveBtn.disabled = false;
+    saveBtn.textContent = 'Send Comment';
   }
 });
 
@@ -597,3 +686,13 @@ loadOrders();
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) loadOrders();
 });
+
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    renderFeedbackSection,
+    getCustomerOrderComments,
+    extractComponents,
+    classifyComponent
+  };
+}

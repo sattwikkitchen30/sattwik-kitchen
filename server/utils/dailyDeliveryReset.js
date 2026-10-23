@@ -1,11 +1,99 @@
+const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
-const { addDays, endOfDay, formatDateKey, isServiceDay, startOfDay } = require('./tiffinPreparation');
-const { getCurrentServiceDate } = require('./deliveryStatus');
+const { addDays, endOfDay, formatDateKey, isServiceDay, startOfDay, getSubscriptionServiceDates } = require('./tiffinPreparation');
+const { getCurrentServiceDate, getOrderServiceDates } = require('./deliveryStatus');
 const { emitOrderUpdate } = require('./orderEvents');
 
 const BUSINESS_TIMEZONE = process.env.BUSINESS_TIMEZONE || 'America/Vancouver';
 
+async function expireSubscriptionOrders(Order, { now = new Date(), app } = {}) {
+  const todayKey = formatDateKey(now);
+  if (!todayKey) return 0;
+
+  const query = {
+    status: { $nin: ['CANCELLED', 'EXPIRED'] },
+    $or: [
+      { type: 'tiffin' },
+      { 'items.fulfillment': 'delivery' },
+      { fulfillment: 'delivery' },
+      { 'tiffinPlan.packageType': { $exists: true, $ne: null } }
+    ]
+  };
+
+  const findResult = Order.find(query);
+  const candidates = typeof findResult?.lean === 'function'
+    ? await findResult.lean()
+    : await findResult;
+
+  let expiredCount = 0;
+  for (const order of candidates || []) {
+    const items = Array.isArray(order.items) ? order.items : [];
+    const isPickupOnly = (items.length > 0 && items.every((i) => i.fulfillment === 'pickup'))
+      || (order.fulfillment === 'pickup' && !items.some((i) => i.fulfillment === 'delivery'));
+    if (isPickupOnly) continue;
+
+    const serviceDates = getOrderServiceDates(order);
+    const endDate = order.subscriptionEndDate
+      || (serviceDates.length ? serviceDates[serviceDates.length - 1] : null)
+      || (order.subscriptionStartDate ? getSubscriptionServiceDates(order.subscriptionStartDate).endDate : null);
+    const endDateKey = endDate ? formatDateKey(endDate) : null;
+
+    if (endDateKey && todayKey >= endDateKey) {
+      const hasDeliveryItems = items.some((i) => i.fulfillment === 'delivery');
+      const isDelivered = order.status === 'DELIVERED' || items.find((i) => i.fulfillment === 'delivery')?.deliveryStatus === 'DELIVERED';
+
+      const updateSet = {
+        status: 'EXPIRED'
+      };
+      if (hasDeliveryItems) {
+        updateSet['items.$[delivery].deliveryStatus'] = isDelivered ? 'DELIVERED' : 'EXPIRED';
+      }
+
+      const options = {
+        new: true,
+        runValidators: true
+      };
+      if (hasDeliveryItems) {
+        options.arrayFilters = [{ 'delivery.fulfillment': 'delivery' }];
+      }
+
+      const updateQuery1 = Order.findOneAndUpdate(
+        {
+          _id: order._id,
+          status: { $nin: ['CANCELLED', 'EXPIRED'] }
+        },
+        { $set: updateSet },
+        options
+      );
+      const updated = typeof updateQuery1?.lean === 'function' ? await updateQuery1.lean() : await updateQuery1;
+
+      if (updated) {
+        expiredCount += 1;
+        if (mongoose.connection && mongoose.connection.readyState === 1) {
+          try {
+            const TiffinSubscription = mongoose.models.TiffinSubscription || require('../models/TiffinSubscription');
+            await TiffinSubscription.updateMany(
+              { orderId: order._id, status: { $ne: 'CANCELLED' } },
+              { $set: { status: 'EXPIRED' } }
+            );
+          } catch {
+            // ignore if model not loaded
+          }
+        }
+        if (app) {
+          const updatedDoc = typeof updated.toObject === 'function' ? updated.toObject() : updated;
+          emitOrderUpdate(app, updatedDoc);
+        }
+      }
+    }
+  }
+
+  return expiredCount;
+}
+
 async function resetDeliveredOrders(Order, { now = new Date(), app } = {}) {
+  await expireSubscriptionOrders(Order, { now, app });
+
   if (!isServiceDay(now)) return 0;
   const today = startOfDay(now);
   const todayKey = formatDateKey(today);
@@ -28,15 +116,15 @@ async function resetDeliveredOrders(Order, { now = new Date(), app } = {}) {
     const serviceDate = getCurrentServiceDate(order, now);
     if (!serviceDate || formatDateKey(serviceDate) !== todayKey) continue;
 
-    // Check if this is the final service day
+    // Check if this is the final service day or past it
     const endDate = order.subscriptionEndDate;
     const endDateKey = endDate ? formatDateKey(endDate) : null;
-    const isFinalDay = endDateKey && todayKey === endDateKey;
+    const isFinalDay = endDateKey && todayKey >= endDateKey;
 
-    // If this is the final service day and it's delivered, mark subscription as expired
+    // If this is the final service day (or past it) and it's delivered, mark subscription as expired
     // instead of resetting to ACCEPTED
     if (isFinalDay) {
-      const updatedOrder = await Order.findOneAndUpdate({
+      const updateQuery2 = Order.findOneAndUpdate({
         _id: order._id,
         status: order.status,
         deliveryStatusDate: order.deliveryStatusDate ?? null
@@ -50,14 +138,15 @@ async function resetDeliveredOrders(Order, { now = new Date(), app } = {}) {
         new: true,
         runValidators: true,
         arrayFilters: [{ 'delivery.fulfillment': 'delivery' }]
-      }).lean();
+      });
+      const updatedOrder = typeof updateQuery2?.lean === 'function' ? await updateQuery2.lean() : await updateQuery2;
       if (!updatedOrder) continue;
       resetCount += 1;
       if (app) emitOrderUpdate(app, updatedOrder);
       continue;
     }
 
-    const updatedOrder = await Order.findOneAndUpdate({
+    const updateQuery3 = Order.findOneAndUpdate({
       _id: order._id,
       status: order.status,
       deliveryStatusDate: order.deliveryStatusDate ?? null
@@ -72,7 +161,8 @@ async function resetDeliveredOrders(Order, { now = new Date(), app } = {}) {
       new: true,
       runValidators: true,
       arrayFilters: [{ 'delivery.fulfillment': 'delivery' }]
-    }).lean();
+    });
+    const updatedOrder = typeof updateQuery3?.lean === 'function' ? await updateQuery3.lean() : await updateQuery3;
     if (!updatedOrder) continue;
     resetCount += 1;
     if (app) emitOrderUpdate(app, updatedOrder);
@@ -87,6 +177,8 @@ function startDailyDeliveryReset(Order, app, { now = () => new Date(), setTimeou
     if (stopped) return;
     try {
       const currentTime = now();
+      const expiredCount = await expireSubscriptionOrders(Order, { now: currentTime, app });
+      if (expiredCount) console.info(`[sattwik] expired ${expiredCount} subscription(s) for ${formatDateKey(currentTime)}`);
       const resetCount = await resetDeliveredOrders(Order, { now: currentTime, app });
       if (resetCount) console.info(`[sattwik] reset ${resetCount} delivered subscription(s) for ${formatDateKey(currentTime)}`);
     } catch (error) {
@@ -110,4 +202,4 @@ function startDailyDeliveryReset(Order, app, { now = () => new Date(), setTimeou
   };
 }
 
-module.exports = { resetDeliveredOrders, startDailyDeliveryReset };
+module.exports = { expireSubscriptionOrders, resetDeliveredOrders, startDailyDeliveryReset };

@@ -13,6 +13,8 @@ const { extractDeliveryCatalogItems, resolveDeliveryCatalogSelection, normalizeI
 const { getOrderCustomer } = require('../utils/orderCustomer');
 const { normalizeStatus, transitionOrderStatus } = require('../utils/orderStatus');
 const { parseDateOnly } = require('../utils/dateFilter');
+const { expireSubscriptionOrders } = require('../utils/dailyDeliveryReset');
+const { getEffectiveOrderComments, migrateLegacyFeedbackToComments, validateCommentText } = require('../utils/orderComments');
 
 function extractOrderFulfillment(orderItems = []) {
   if (!orderItems.length) return 'pickup';
@@ -621,6 +623,7 @@ async function createManualOrder(req, res) {
 }
 
 async function listOrders(req, res) {
+  try { await expireSubscriptionOrders(Order, { now: new Date(), app: req.app }); } catch (e) { /* ignore */ }
   const { status, type, area, search, sort = '-createdAt', page = 1, limit = 50, from, to, createdFrom, createdTo, orderDate, fulfillment } = req.query;
   const fulfillmentFilter = String(fulfillment || '').toLowerCase();
   if (fulfillmentFilter && !['delivery', 'pickup'].includes(fulfillmentFilter)) {
@@ -923,7 +926,8 @@ async function listOrders(req, res) {
         pickupDate: formatDateKey(order.pickupDate),
         subscriptionStartDate: formatDateKey(deliveryStartDate),
         subscriptionEndDate: formatDateKey(order.subscriptionEndDate || derivedDeliveryDates?.endDate),
-        deliveryStatusDate: formatDateKey(order.deliveryStatusDate)
+        deliveryStatusDate: formatDateKey(order.deliveryStatusDate),
+        comments: getEffectiveOrderComments(order)
       };
     }),
     total,
@@ -934,6 +938,7 @@ async function listOrders(req, res) {
 }
 
 async function getOrder(req, res) {
+  try { await expireSubscriptionOrders(Order, { now: new Date(), app: req.app }); } catch (e) { /* ignore */ }
   const order = await Order.findById(req.params.id).populate('customer', 'firstName lastName phone email area');
   if (!order) return res.status(404).json({ message: 'Order not found' });
   const responseOrder = order.toObject();
@@ -952,6 +957,7 @@ async function getOrder(req, res) {
   } else if (!responseOrder.customerFeedback) {
     responseOrder.customerFeedback = {};
   }
+  responseOrder.comments = getEffectiveOrderComments(responseOrder);
   res.json({ order: responseOrder });
 }
 
@@ -1615,4 +1621,59 @@ async function addPayment(req, res) {
   });
 }
 
-module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateAmount, updateTiffinItems, updateStatus, deleteOrder, assignDeliveryMember, updatePickupDate, updateTiffinEndDate, getPayments, addPayment };
+
+async function getOrderComments(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid order ID.' });
+  }
+  const order = await Order.findById(req.params.id).lean();
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+  const fulfillment = req.query.fulfillment || req.query.type;
+  const comments = getEffectiveOrderComments(order, fulfillment);
+  res.json({ comments });
+}
+
+async function addOrderComment(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).json({ message: 'Invalid order ID.' });
+  }
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ message: 'Order not found.' });
+
+  const fulfillment = String(req.body?.fulfillment || req.body?.type || (order.fulfillment === 'pickup' ? 'pickup' : 'delivery')).toLowerCase();
+  if (!['pickup', 'delivery'].includes(fulfillment)) {
+    return res.status(400).json({ message: 'Fulfillment component must be pickup or delivery.' });
+  }
+
+  const validation = validateCommentText(req.body?.text);
+  if (validation.error) {
+    return res.status(400).json({ message: validation.error });
+  }
+
+  migrateLegacyFeedbackToComments(order);
+
+  const newComment = {
+    _id: new mongoose.Types.ObjectId(),
+    orderId: order._id,
+    fulfillment,
+    authorType: 'admin',
+    authorId: req.admin?.id || null,
+    authorName: req.admin?.name || 'Admin',
+    text: validation.trimmed,
+    createdAt: new Date()
+  };
+
+  order.comments.push(newComment);
+  order.markModified('comments');
+  await order.save();
+
+  emitOrderUpdate(req.app, order);
+
+  res.status(201).json({
+    message: 'Comment added.',
+    comment: order.comments[order.comments.length - 1],
+    comments: getEffectiveOrderComments(order, fulfillment)
+  });
+}
+
+module.exports = { createOrder, createManualOrder, listOrders, getOrder, updateAmount, updateTiffinItems, updateStatus, deleteOrder, assignDeliveryMember, updatePickupDate, updateTiffinEndDate, getPayments, addPayment, getOrderComments, addOrderComment };

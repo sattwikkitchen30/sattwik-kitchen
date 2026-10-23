@@ -65,6 +65,7 @@
               <option value="ACCEPTED">Accepted</option>
               <option value="OUT_FOR_DELIVERY">Out for delivery</option>
               <option value="DELIVERED">Delivered</option>
+              <option value="EXPIRED">Expired</option>
               <option value="CANCELLED">Cancelled</option>
             </select>
           </label>
@@ -791,6 +792,40 @@
           <button type="button" class="btn btn-secondary" id="cancelCustomerBtn">Cancel</button>
         </div>
         <p id="customerEditMessage" class="form-message" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Order Comments modal
+       ===================================================================== -->
+  <div id="orderCommentsModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="orderCommentsTitle" hidden>
+    <div class="modal-shell order-comments-modal">
+      <div class="modal-header">
+        <h3 id="orderCommentsTitle">Order Comments</h3>
+        <button type="button" class="modal-close" id="orderCommentsCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div id="orderCommentsOrderInfo" class="order-comments-order-info"></div>
+      <div id="orderCommentsList" class="order-comments-list" role="region" aria-label="Conversation history"></div>
+      <form id="orderCommentsForm" class="stacked-form order-comments-form" novalidate>
+        <input type="hidden" id="orderCommentOrderId" />
+        <input type="hidden" id="orderCommentComponentType" />
+        <label for="orderCommentInput" class="order-comment-input-label">
+          Add comment (Admin)
+          <textarea
+            id="orderCommentInput"
+            name="text"
+            rows="3"
+            maxlength="2000"
+            placeholder="Type your comment to the customer..."
+            required
+          ></textarea>
+        </label>
+        <div class="order-comments-actions">
+          <span class="order-comment-char-count"><span id="orderCommentCharCount">0</span>/2000</span>
+          <button type="submit" class="btn btn-primary" id="orderCommentSubmitBtn">Send Comment</button>
+        </div>
+        <p id="orderCommentsMessage" class="form-message" aria-live="polite"></p>
       </form>
     </div>
   </div>

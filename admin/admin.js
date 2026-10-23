@@ -241,12 +241,62 @@ function deliveryStatusLabel(status) {
  * Shows a short preview (≤120 chars) with a tooltip containing the full text.
  * Returns '—' when no feedback has been submitted.
  */
+function getOrderComments(order, componentType) {
+  if (!order) return [];
+  const rawComments = Array.isArray(order.comments) ? order.comments : [];
+  const comments = rawComments.filter((c) => !componentType || c.fulfillment === componentType).map((c) => ({ ...c }));
+
+  // Check legacy customerFeedback
+  const fb = order.customerFeedback || {};
+  const legacyText = typeof fb === 'object' ? (fb[componentType] || '') : '';
+  if (legacyText && legacyText.trim()) {
+    const trimmed = legacyText.trim();
+    const alreadyPresent = comments.some(
+      (c) => c.fulfillment === componentType && c.authorType === 'customer' && String(c.text || '').trim() === trimmed
+    );
+    if (!alreadyPresent) {
+      comments.unshift({
+        _id: 'legacy-fb-' + (order._id || '0') + '-' + componentType,
+        orderId: order._id,
+        fulfillment: componentType,
+        authorType: 'customer',
+        authorName: (order.customer && [order.customer.firstName, order.customer.lastName].filter(Boolean).join(' ')) || 'Customer',
+        text: trimmed,
+        createdAt: order.updatedAt || order.createdAt || new Date().toISOString()
+      });
+    }
+  }
+
+  comments.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  return comments;
+}
+
+/**
+ * Renders the compact comments / feedback cell for the admin orders table.
+ * Shows a short single-line preview with an em-dash if empty, or truncated text
+ * with a blue "More" link if the comment exceeds available space or has multiple comments.
+ */
 function renderAdminFeedbackCell(order, componentType) {
-  const feedbackMap = order.customerFeedback || {};
-  const text = typeof feedbackMap === 'object' ? (feedbackMap[componentType] || '') : '';
-  if (!text) return '<span class="admin-feedback-empty">—</span>';
-  const preview = text.length > 120 ? `${text.slice(0, 117)}…` : text;
-  return `<span class="admin-feedback-preview" title="${escHtml(text)}">${escHtml(preview)}</span>`;
+  const comments = getOrderComments(order, componentType);
+  if (!comments.length) {
+    return `<div class="admin-comments-cell"><span class="admin-feedback-empty">—</span> <button type="button" class="open-comments-btn" data-order-id="${escHtml(order._id)}" data-component-type="${escHtml(componentType)}" title="Add comment">Add</button></div>`;
+  }
+
+  const latest = comments[comments.length - 1];
+  const count = comments.length;
+  const author = latest.authorType === 'admin' ? 'Admin' : 'Customer';
+  const fullText = latest.text || '';
+  const previewClean = fullText.replace(/\s+/g, ' ').trim();
+  const isLong = previewClean.length > 50 || fullText.includes('\n') || count > 1;
+  const truncated = previewClean.length > 45 ? `${previewClean.slice(0, 42)}…` : previewClean;
+
+  return `
+    <div class="admin-comments-cell">
+      <span class="admin-feedback-preview" title="${escHtml(fullText)}" data-order-id="${escHtml(order._id)}" data-component-type="${escHtml(componentType)}"><strong>${escHtml(author)}:</strong> ${escHtml(truncated)}</span>
+      ${isLong || count > 1 ? `<a href="#" class="comment-more-link" data-order-id="${escHtml(order._id)}" data-component-type="${escHtml(componentType)}" role="button">More</a>` : ''}
+      ${count > 1 ? `<span class="comment-count-pill" title="${count} comments">(${count})</span>` : ''}
+    </div>
+  `;
 }
 
 function renderDeliveryStatusOptions(status, includeCancelled = false, canCancel = true) {
@@ -857,6 +907,7 @@ async function renderOrdersTable() {
                   <select class="tiffin-status-select order-status-select" data-order-id="${order._id}" data-current-status="${tiffinStatus}" ${['DELIVERED', 'CANCELLED', 'EXPIRED'].includes(tiffinStatus) ? 'disabled' : ''}>
                     ${renderDeliveryStatusOptions(tiffinStatus, true, canCancel)}
                   </select>
+                  <span class="badge ${String(tiffinStatus).toLowerCase()}">${deliveryStatusLabel(tiffinStatus)}</span>
                 </td>
                 <td class="order-feedback-cell">${renderAdminFeedbackCell(order, 'delivery')}</td>
               </tr>
@@ -1053,6 +1104,17 @@ async function renderOrdersTable() {
       showAdminToast(error.message || 'Could not open payment history.');
     }
   }));
+
+  table.querySelectorAll('.open-comments-btn, .comment-more-link, .admin-feedback-preview').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      try {
+        await openOrderCommentsModal(btn.dataset.orderId, btn.dataset.componentType);
+      } catch (error) {
+        showAdminToast(error.message || 'Could not open order comments.');
+      }
+    });
+  });
 }
 
 function renderOrderAmountEditor(order) {
@@ -1147,6 +1209,112 @@ function closePaymentHistoryModal() {
   currentPaymentOrderId = null;
 }
 
+
+let currentCommentOrderId = null;
+let currentCommentComponentType = null;
+
+async function openOrderCommentsModal(orderId, componentType) {
+  if (!orderId) return;
+  currentCommentOrderId = orderId;
+  currentCommentComponentType = componentType || 'delivery';
+
+  const modal = document.getElementById('orderCommentsModal');
+  const infoEl = document.getElementById('orderCommentsOrderInfo');
+  const msgEl = document.getElementById('orderCommentsMessage');
+  const inputEl = document.getElementById('orderCommentInput');
+  const orderIdInput = document.getElementById('orderCommentOrderId');
+  const compInput = document.getElementById('orderCommentComponentType');
+  const charCountEl = document.getElementById('orderCommentCharCount');
+
+  if (orderIdInput) orderIdInput.value = orderId;
+  if (compInput) compInput.value = currentCommentComponentType;
+  if (msgEl) { msgEl.textContent = ''; msgEl.className = 'form-message'; }
+  if (inputEl) { inputEl.value = ''; }
+  if (charCountEl) { charCountEl.textContent = '0'; }
+
+  // Find order in state.orders
+  let order = (state.orders || []).find((o) => String(o._id) === String(orderId));
+
+  if (infoEl) {
+    const cust = (order && (order.customer || order.customerSnapshot)) || {};
+    const custName = [cust.firstName, cust.lastName].filter(Boolean).join(' ') || cust.name || 'Customer';
+    const orderNum = order ? (order.orderId || order._id) : orderId;
+    const compLabel = currentCommentComponentType === 'pickup' ? 'Pickup' : 'Delivery';
+    infoEl.innerHTML = `
+      <div class="order-info-chip"><strong>Order:</strong> #${escHtml(orderNum)}</div>
+      <div class="order-info-chip"><strong>Customer:</strong> ${escHtml(custName)}</div>
+      <div class="order-info-chip"><span class="order-info-component ${currentCommentComponentType}">${escHtml(compLabel)}</span></div>
+    `;
+  }
+
+  renderOrderCommentsConversation(order, currentCommentComponentType);
+
+  if (modal) modal.hidden = false;
+
+  // Also fetch latest from backend
+  try {
+    const data = await api(`/orders/${encodeURIComponent(orderId)}/comments?fulfillment=${encodeURIComponent(currentCommentComponentType)}`);
+    if (data && Array.isArray(data.comments)) {
+      if (order) {
+        if (!order.comments) order.comments = [];
+        // Update in-memory comments for this fulfillment
+        order.comments = order.comments.filter((c) => c.fulfillment !== currentCommentComponentType).concat(data.comments);
+      }
+      renderOrderCommentsConversation(order || { _id: orderId, comments: data.comments }, currentCommentComponentType);
+    }
+  } catch (err) {
+    // Silent fallback to existing in-memory comments
+  }
+}
+
+function renderOrderCommentsConversation(order, componentType) {
+  const listEl = document.getElementById('orderCommentsList');
+  if (!listEl) return;
+  const comments = getOrderComments(order, componentType);
+  if (!comments.length) {
+    listEl.innerHTML = `
+      <div class="comments-empty-message">
+        <div class="comments-empty-icon">💬</div>
+        <div class="comments-empty-text">No comments yet for this order.</div>
+        <div class="comments-empty-subtext">Send a message below to start the conversation with the customer.</div>
+      </div>
+    `;
+    return;
+  }
+
+  listEl.innerHTML = comments.map((c) => {
+    const isAdmin = c.authorType === 'admin';
+    const authorBadgeClass = isAdmin ? 'author-admin badge-admin' : 'author-customer badge-customer';
+    const bubbleClass = isAdmin ? 'admin-comment comment-from-admin' : 'customer-comment comment-from-customer';
+    const authorLabel = isAdmin ? 'Admin' : (c.authorName || 'Customer');
+    const timeStr = c.createdAt
+      ? new Date(c.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Vancouver' })
+      : '';
+    return `
+      <div class="comment-bubble ${bubbleClass}">
+        <div class="comment-bubble-header comment-bubble-meta">
+          <span class="comment-author-badge comment-author ${authorBadgeClass}">${escHtml(authorLabel)}</span>
+          <span class="comment-timestamp comment-time">${escHtml(timeStr)}</span>
+        </div>
+        <div class="comment-bubble-text comment-text">${escHtml(c.text)}</div>
+      </div>
+    `;
+  }).join('');
+
+  listEl.scrollTop = listEl.scrollHeight;
+}
+
+function closeOrderCommentsModal() {
+  const modal = document.getElementById('orderCommentsModal');
+  if (modal) modal.hidden = true;
+  currentCommentOrderId = null;
+  currentCommentComponentType = null;
+  const inputEl = document.getElementById('orderCommentInput');
+  if (inputEl) inputEl.value = '';
+  const msgEl = document.getElementById('orderCommentsMessage');
+  if (msgEl) { msgEl.textContent = ''; msgEl.className = 'form-message'; }
+}
+
 async function openEditCustomerModal(customerId) {
   if (!customerId) return;
   currentEditCustomerId = customerId;
@@ -1204,6 +1372,82 @@ function closeEditCustomerModal() {
 if (window.location.pathname.endsWith('/dashboard.html')) {
   document.getElementById('paymentHistoryCloseBtn')?.addEventListener('click', closePaymentHistoryModal);
   document.getElementById('cancelPaymentBtn')?.addEventListener('click', closePaymentHistoryModal);
+
+  document.getElementById('orderCommentsCloseBtn')?.addEventListener('click', closeOrderCommentsModal);
+  document.getElementById('orderCommentsModal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeOrderCommentsModal();
+  });
+  document.getElementById('orderCommentInput')?.addEventListener('input', (e) => {
+    const charEl = document.getElementById('orderCommentCharCount');
+    if (charEl) charEl.textContent = e.target.value.length;
+  });
+
+  document.getElementById('orderCommentsForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const orderId = document.getElementById('orderCommentOrderId')?.value;
+    const componentType = document.getElementById('orderCommentComponentType')?.value || 'delivery';
+    const inputEl = document.getElementById('orderCommentInput');
+    const msgEl = document.getElementById('orderCommentsMessage');
+    const submitBtn = document.getElementById('orderCommentSubmitBtn');
+
+    if (!orderId || !inputEl) return;
+    const text = inputEl.value.trim();
+    if (msgEl) { msgEl.textContent = ''; msgEl.className = 'form-message'; }
+
+    if (!text) {
+      if (msgEl) { msgEl.textContent = 'Comment text cannot be empty.'; msgEl.className = 'form-message error'; }
+      return;
+    }
+    if (text.length > 2000) {
+      if (msgEl) { msgEl.textContent = 'Comment must be 2,000 characters or fewer.'; msgEl.className = 'form-message error'; }
+      return;
+    }
+
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending…'; }
+
+    try {
+      const data = await api(`/orders/${encodeURIComponent(orderId)}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ fulfillment: componentType, text })
+      });
+
+      inputEl.value = '';
+      const charEl = document.getElementById('orderCommentCharCount');
+      if (charEl) charEl.textContent = '0';
+
+      // Update in-memory order
+      let order = (state.orders || []).find((o) => String(o._id) === String(orderId));
+      if (order) {
+        if (!order.comments) order.comments = [];
+        if (data.comment) order.comments.push(data.comment);
+      }
+
+      renderOrderCommentsConversation(order || { _id: orderId, comments: data.comments || [] }, componentType);
+
+      // Update the table cell without full reload
+      const table = document.getElementById('ordersTable');
+      if (table) {
+        const cell = table.querySelector(`.order-comments-cell [data-order-id="${orderId}"][data-component-type="${componentType}"]`)?.closest('.order-comments-cell')
+          || table.querySelector(`.order-feedback-cell [data-order-id="${orderId}"][data-component-type="${componentType}"]`)?.closest('.order-feedback-cell');
+        if (cell && order) {
+          cell.innerHTML = renderAdminFeedbackCell(order, componentType);
+        }
+      }
+
+      if (msgEl) {
+        msgEl.textContent = 'Comment sent!';
+        msgEl.className = 'form-message success';
+        setTimeout(() => { if (msgEl.textContent === 'Comment sent!') msgEl.textContent = ''; }, 3000);
+      }
+    } catch (err) {
+      if (msgEl) {
+        msgEl.textContent = err.message || 'Could not send comment.';
+        msgEl.className = 'form-message error';
+      }
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Send Comment'; }
+    }
+  });
 
   document.getElementById('customerEditCloseBtn')?.addEventListener('click', closeEditCustomerModal);
   document.getElementById('cancelCustomerBtn')?.addEventListener('click', closeEditCustomerModal);
@@ -3345,6 +3589,7 @@ document.addEventListener('keydown', (e) => {
     closeAddModal();
     closeManualOrderModal();
     closeEditCustomerModal();
+    closeOrderCommentsModal();
   }
 });
 
@@ -4357,6 +4602,11 @@ if (typeof module !== 'undefined' && module.exports) {
     updateManualOrderAmount,
     shiftDateKey,
     loadTiffinPreparation,
+    openOrderCommentsModal,
+    closeOrderCommentsModal,
+    renderOrderCommentsConversation,
+    getOrderComments,
+    renderAdminFeedbackCell,
     openEditCustomerModal,
     closeEditCustomerModal,
     renderCustomersTable,

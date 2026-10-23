@@ -14,7 +14,9 @@ const LEGACY_STATUS = {
   DELIVERED: 'DELIVERED',
   delivered: 'DELIVERED',
   CANCELLED: 'CANCELLED',
-  cancelled: 'CANCELLED'
+  cancelled: 'CANCELLED',
+  EXPIRED: 'EXPIRED',
+  expired: 'EXPIRED'
 };
 
 function normalizeStatus(status) {
@@ -63,6 +65,9 @@ function getTransition(order, requested, fulfillment, now, actor) {
   }
   if (orderCancelled || current === 'CANCELLED') {
     return { error: { status: 409, message: 'Cancelled orders cannot be changed.' } };
+  }
+  if (current === 'EXPIRED') {
+    return { error: { status: 409, message: 'Expired orders cannot be changed.' } };
   }
   if (requested === 'CANCELLED' && (order.firstDeliveredAt || order.deliveredAt)) {
     return { error: { status: 409, message: 'An order that has been delivered cannot be cancelled.' } };

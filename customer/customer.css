@@ -10,7 +10,7 @@
 .orders-tabs{display:flex;gap:6px;background:#f5ebdb;padding:5px;border-radius:999px;margin-bottom:24px}.orders-tab{flex:1;border:0;border-radius:999px;padding:11px 8px;background:transparent;color:#6e5b50;font-weight:800;cursor:pointer;font:inherit;display:flex;align-items:center;justify-content:center;gap:6px;transition:.15s}.orders-tab:hover{color:#4a230f}.orders-tab.active{background:#fff;color:#4a230f;box-shadow:0 4px 14px rgba(0,0,0,.08)}.tab-count{min-width:20px;height:20px;border-radius:999px;background:#eadfce;color:#6e5b50;font-size:10px;font-weight:900;display:inline-grid;place-items:center;padding:0 5px}.orders-tab.active .tab-count{background:#f0e6d8;color:#4a230f}
 
 /* ── Order card (compact) ─────────────────────────────────────────────────── */
-.order-card{padding:18px 20px;transition:.15s}.order-card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}.order-card-meta{flex:1;min-width:0}.order-card-top-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:5px}.order-id-label{font-family:Georgia,serif;font-size:17px;font-weight:700;color:#4a230f}.order-card-summary{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:#75675e;line-height:1.4}.card-item-summary{color:#3d2710;font-weight:600}.card-date-summary{color:#83756d}.order-card-aside{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}.order-component-amount{color:#0c7a62;font-weight:900;font-size:18px;line-height:1}.order-status-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800}.status-pending{background:#fdf5e4;color:#9a7020}.status-accepted{background:#edf7f0;color:#0c7a62}.status-out{background:#e8f2fe;color:#2563ab}.status-delivered{background:#dcefe9;color:#075a48}.status-cancelled{background:#faeaea;color:#9b3333}.status-expired{background:#faeaea;color:#9b3333}
+.order-card{padding:18px 20px;transition:.15s}.order-card-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}.order-card-meta{flex:1;min-width:0}.order-card-top-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:5px}.order-id-label{font-family:Georgia,serif;font-size:17px;font-weight:700;color:#4a230f}.order-card-summary{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:#75675e;line-height:1.4}.card-item-summary{color:#3d2710;font-weight:600}.card-date-summary{color:#83756d}.order-card-aside{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}.order-component-amount{color:#0c7a62;font-weight:900;font-size:18px;line-height:1}.order-status-badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:800}.status-pending{background:#fdf5e4;color:#9a7020}.status-accepted{background:#edf7f0;color:#0c7a62}.status-out{background:#e8f2fe;color:#2563ab}.status-delivered{background:#dcefe9;color:#075a48}.status-cancelled{background:#faeaea;color:#9b3333}.status-expired{background:#fbe8e8;color:#b91c1c;font-weight:800;}
 
 /* ── Fulfillment badge ────────────────────────────────────────────────────── */
 .fulfillment-badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.3px;text-transform:uppercase}.badge-pickup{background:#f3ece3;color:#6d3518}.badge-delivery{background:#e8f2fe;color:#1e4fa0}
@@ -64,4 +64,15 @@
 .feedback-message{min-height:16px;margin-top:7px;font-size:12px;font-weight:600}
 .feedback-message-success{color:#0c7a62}
 .feedback-message-error{color:#9b4c46}
+.customer-comments-conversation{display:flex;flex-direction:column;gap:10px;margin-bottom:12px;max-height:280px;overflow-y:auto;padding:4px 0}
+.customer-comment-bubble{padding:9px 12px;border-radius:10px;font-size:13px;max-width:88%;box-shadow:0 1px 2px rgba(0,0,0,0.05)}
+.customer-comment-bubble.comment-from-admin{align-self:flex-start;background:#e8f5f1;border:1px solid #c0e6db}
+.customer-comment-bubble.comment-from-customer{align-self:flex-end;background:#ffffff;border:1px solid #ebd9c8}
+.comment-bubble-meta{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:11px}
+.comment-author{font-weight:800;text-transform:uppercase;font-size:10px;padding:2px 6px;border-radius:4px;letter-spacing:.5px}
+.comment-author.badge-admin{background:#0c7a62;color:#fff}
+.comment-author.badge-customer{background:#8e322d;color:#fff}
+.comment-time{color:#9b8c81}
+.comment-text{white-space:pre-wrap;word-break:break-word;color:#26170f;line-height:1.45}
+.comments-empty-notice{font-size:12px;color:#9b8c81;font-style:italic;margin-bottom:10px}
 

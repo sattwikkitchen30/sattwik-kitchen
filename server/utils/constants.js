@@ -1,4 +1,4 @@
-const DELIVERY_STATUSES = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'];
+const DELIVERY_STATUSES = ['PENDING', 'ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'EXPIRED'];
 const LEGACY_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'];
 const ORDER_STATUSES = [...DELIVERY_STATUSES, ...LEGACY_ORDER_STATUSES];
 const REVENUE_STATUSES = ['DELIVERED', 'delivered'];

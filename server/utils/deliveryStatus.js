@@ -23,11 +23,20 @@ function getCurrentServiceDate(order, now = new Date()) {
 function resolveDeliveryStatus(order, now = new Date()) {
   const deliveryItem = (order?.items || []).find((item) => item.fulfillment === 'delivery');
   const status = String(order?.status || deliveryItem?.deliveryStatus || 'PENDING').toUpperCase();
-  if (status === 'CANCELLED') return status;
+  if (status === 'CANCELLED' || status === 'EXPIRED') return status;
 
   const serviceDates = getOrderServiceDates(order);
-  if (order?.type !== 'tiffin') return status;
+  const isSubscription = order?.type === 'tiffin' || Boolean(order?.tiffinPlan?.packageType) || (order?.items || []).some((i) => i.fulfillment === 'delivery');
+  const endDate = order?.subscriptionEndDate || (serviceDates.length ? serviceDates[serviceDates.length - 1] : null);
+  const endDateKey = endDate ? formatDateKey(endDate) : null;
   const todayKey = formatDateKey(now);
+  if (isSubscription && endDateKey && todayKey >= endDateKey && status !== 'DELIVERED') {
+    return 'EXPIRED';
+  }
+
+  if (status === 'PENDING') return status;
+
+  if (order?.type !== 'tiffin') return status;
   const currentIndex = serviceDates.findIndex((date) => formatDateKey(date) === todayKey);
   if (currentIndex < 0 || !isServiceDay(now)) return status;
 
@@ -74,7 +83,7 @@ function isTiffinPreparationEligible(order, serviceDate) {
     const serviceKey = formatDateKey(serviceDate);
     if (!serviceDates.some((date) => formatDateKey(date) === serviceKey)) return false;
   }
-  return ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED'].includes(resolveDeliveryStatus(order, serviceDate));
+  return ['ACCEPTED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'EXPIRED'].includes(resolveDeliveryStatus(order, serviceDate));
 }
 
 function filterTiffinPreparationSubscriptions(subscriptions, serviceDate) {

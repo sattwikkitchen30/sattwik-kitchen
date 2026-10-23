@@ -983,7 +983,7 @@ test('manual order accepts plans instead of items', async () => {
 
   assert.equal(response.statusCode, 201);
   assert.ok(response.body.order);
-}
+});
 
 test('getPayments returns payment history for an order', async () => {
   const orderId = new mongoose.Types.ObjectId();

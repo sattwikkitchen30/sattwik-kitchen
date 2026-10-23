@@ -981,7 +981,8 @@ th {
 .badge.ready { background: #dff5ea; color: #11613d; }
 .badge.delivered { background: #dff3ec; color: #0f5e46; }
 .badge.cancelled { background: #fbe8e8; color: #8e322d; }
-.badge.expired { background: #fbe8e8; color: #8e322d; }
+.badge.expired { background: #fbe8e8; color: #b91c1c; font-weight: 700; }
+.order-status-select[data-current-status="EXPIRED"] { color: #b91c1c; font-weight: 700; border-color: #f87171; }
 .row-warning {
   background: #fff1a8;
 }
@@ -1284,18 +1285,61 @@ th {
   border-color: var(--green);
 }
 
-/* Customer Feedback column */
-.order-feedback-cell {
-  max-width: 180px;
-  vertical-align: top;
+/* Customer Feedback / Order Comments column */
+.order-feedback-cell,
+.order-comments-cell {
+  max-width: 220px;
+  vertical-align: middle;
+}
+.admin-comments-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  max-width: 220px;
 }
 .admin-feedback-preview {
-  display: block;
+  display: inline-block;
   font-size: 12px;
   color: var(--ink);
-  white-space: pre-wrap;
-  word-break: break-word;
-  cursor: help;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 135px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.comment-more-link {
+  color: #0b66c2 !important;
+  text-decoration: underline !important;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: 2px;
+}
+.comment-more-link:hover {
+  color: #004182 !important;
+}
+.open-comments-btn {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.open-comments-btn:hover {
+  background: var(--border);
+}
+.comment-count-pill {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
 }
 .admin-feedback-empty {
   color: var(--muted);
@@ -2055,5 +2099,312 @@ th {
   #customerEditModal .modal-shell {
     padding: 16px 14px;
     width: 100%;
+  }
+}
+
+
+/* =====================================================================
+   Order Comments / Customer Feedback Modal (WhatsApp-like Chat)
+   ===================================================================== */
+.order-comments-modal {
+  width: min(640px, 94vw);
+  max-width: 640px;
+  background: var(--panel);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.order-comments-order-info {
+  background: #f8f3ee;
+  border: 1px solid #ede0cd;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.order-info-chip {
+  font-size: 12px;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.order-info-chip strong {
+  color: var(--brown);
+  font-weight: 700;
+}
+
+.order-info-component {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.order-info-component.delivery {
+  background: #dff5ea;
+  color: #0c7a62;
+}
+
+.order-info-component.pickup {
+  background: #fef0db;
+  color: #b45309;
+}
+
+/* Chat container with subtle background & comfortable padding */
+.order-comments-list {
+  max-height: 380px;
+  min-height: 180px;
+  overflow-y: auto;
+  border: 1px solid #ebd9c8;
+  border-radius: 14px;
+  padding: 16px 14px;
+  background: #fbf8f5;
+  background-image: radial-gradient(#eadbc8 0.75px, transparent 0.75px);
+  background-size: 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+  scroll-behavior: smooth;
+}
+
+.order-comments-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.order-comments-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.order-comments-list::-webkit-scrollbar-thumb {
+  background: #d8c7b5;
+  border-radius: 4px;
+}
+
+.order-comments-list::-webkit-scrollbar-thumb:hover {
+  background: #bfa994;
+}
+
+/* Empty conversation state */
+.comments-empty-message {
+  text-align: center;
+  color: #9b8c81;
+  padding: 36px 16px;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.comments-empty-icon {
+  font-size: 32px;
+  line-height: 1;
+  margin-bottom: 4px;
+  opacity: 0.85;
+}
+
+.comments-empty-text {
+  font-size: 14px;
+  font-weight: 700;
+  color: #5f4d43;
+}
+
+.comments-empty-subtext {
+  font-size: 12px;
+  color: #9b8c81;
+  max-width: 280px;
+  line-height: 1.4;
+}
+
+/* Chat Bubbles (WhatsApp style) */
+.comment-bubble {
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 82%;
+  min-width: 140px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+  position: relative;
+  transition: box-shadow 0.15s ease;
+}
+
+/* Admin outgoing bubble (right-aligned, fresh green) */
+.comment-bubble.admin-comment,
+.comment-bubble.comment-from-admin {
+  align-self: flex-end;
+  background: #e8f5f1;
+  border: 1px solid #c0e6db;
+  border-radius: 14px 14px 2px 14px;
+}
+
+/* Customer incoming bubble (left-aligned, warm white) */
+.comment-bubble.customer-comment,
+.comment-bubble.comment-from-customer {
+  align-self: flex-start;
+  background: #ffffff;
+  border: 1px solid #ebd9c8;
+  border-radius: 14px 14px 14px 2px;
+}
+
+.comment-bubble-header,
+.comment-bubble-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  font-size: 11px;
+}
+
+.comment-author-badge,
+.comment-author {
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+.comment-author-badge.author-admin,
+.comment-author.badge-admin {
+  background: #0c7a62;
+  color: #ffffff;
+}
+
+.comment-author-badge.author-customer,
+.comment-author.badge-customer {
+  background: #8e322d;
+  color: #ffffff;
+}
+
+.comment-timestamp,
+.comment-time {
+  font-size: 11px;
+  color: #9b8c81;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.comment-bubble-text,
+.comment-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: #26170f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Comments Form & Input (Pinned at bottom) */
+.order-comments-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fdfbf9;
+  border: 1px solid #ede0cd;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.order-comment-input-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #5f4d43;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.order-comment-input-label textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #ddcfbf;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: #26170f;
+  background: #ffffff;
+  resize: vertical;
+  min-height: 64px;
+  transition: border-color 0.15s, outline 0.15s;
+}
+
+.order-comment-input-label textarea:focus {
+  outline: 2px solid rgba(12, 122, 98, 0.2);
+  border-color: #0c7a62;
+}
+
+.order-comments-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.order-comment-char-count {
+  font-size: 11px;
+  color: #9b8c81;
+  font-weight: 600;
+}
+
+#orderCommentSubmitBtn {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 18px;
+  background: #0c7a62;
+  color: #ffffff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+
+#orderCommentSubmitBtn:hover:not(:disabled) {
+  background: #0a6552;
+}
+
+#orderCommentSubmitBtn:disabled {
+  background: #a0c5bc;
+  cursor: not-allowed;
+}
+
+/* Mobile adjustments */
+@media (max-width: 600px) {
+  .order-comments-modal {
+    width: 96vw;
+    padding: 14px 12px;
+  }
+  .comment-bubble {
+    max-width: 92%;
+    padding: 9px 11px;
+  }
+  .order-comments-list {
+    max-height: 290px;
+    padding: 12px 10px;
+  }
+  .order-comments-order-info {
+    padding: 8px 10px;
+    gap: 6px;
+    font-size: 11px;
   }
 }

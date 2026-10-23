@@ -15,6 +15,8 @@ router.put('/:id/status', authRequired, c.updateStatus);
 router.put('/:id/pickup-date', authRequired, c.updatePickupDate);
 router.put('/:id/tiffin-end-date', authRequired, c.updateTiffinEndDate);
 router.put('/:id/assign', authRequired, c.assignDeliveryMember);
+router.get('/:id/comments', authRequired, c.getOrderComments);
+router.post('/:id/comments', authRequired, c.addOrderComment);
 router.delete('/:id', authRequired, c.deleteOrder);
 
 module.exports = router;

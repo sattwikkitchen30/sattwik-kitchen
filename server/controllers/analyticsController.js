@@ -80,30 +80,37 @@ function revenueExpression() {
 function revenueEligibleItemsExpression() {
   const items = { $ifNull: ['$items', []] };
   const payments = { $ifNull: ['$payments', []] };
-  const totalPaid = { $sum: { $map: { input: payments, as: 'payment', in: { $ifNull: ['$$payment.amount', 0] } } } };
-  const allItemTotal = { $sum: { $map: { input: items, as: 'item', in: { $ifNull: ['$$item.subtotal', 0] } } } };
+  const totalPaid = { $sum: { $map: { input: payments, as: 'payment', in: { $ifNull: ['$payment.amount', 0] } } } };
+  const allItemTotal = { $sum: { $map: { input: items, as: 'item', in: { $ifNull: ['$item.subtotal', 0] } } } };
   return {
-    $map: {
-      input: items,
-      as: 'item',
+    $let: {
+      vars: {
+        totalPaid
+      },
       in: {
-        $mergeObjects: [
-          '$$item',
-          {
-            revenueAmount: {
-              $cond: [
-                { $gt: [allItemTotal, 0] },
-                {
-                  $multiply: [
-                    totalPaid,
-                    { $divide: [{ $ifNull: ['$$item.subtotal', 0] }, allItemTotal] }
+        $map: {
+          input: items,
+          as: 'item',
+          in: {
+            $mergeObjects: [
+              '$item',
+              {
+                revenueAmount: {
+                  $cond: [
+                    { $gt: [allItemTotal, 0] },
+                    {
+                      $multiply: [
+                        '$totalPaid',
+                        { $divide: [{ $ifNull: ['$item.subtotal', 0] }, allItemTotal] }
+                      ]
+                    },
+                    0
                   ]
-                },
-                0
-              ]
-            }
+                }
+              }
+            ]
           }
-        ]
+        }
       }
     }
   };

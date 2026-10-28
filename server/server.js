@@ -34,6 +34,11 @@ app.get('/delivery/signup.html', (req, res) => res.redirect('/delivery/login.htm
 app.use('/delivery', express.static(path.join(__dirname, '..', 'delivery')));
 app.get('/delivery/login', (req, res) => res.sendFile(path.join(__dirname, '..', 'delivery', 'login.html')));
 app.get('/delivery/dashboard', (req, res) => res.sendFile(path.join(__dirname, '..', 'delivery', 'dashboard.html')));
+app.get('/forgot-password', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'forgot-password.html')));
+app.get('/forgot-password.html', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'forgot-password.html')));
+app.get('/reset-password', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'reset-password.html')));
+app.get('/reset-password.html', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'reset-password.html')));
+
 
 app.use('/api/auth', wrapRouter(require('./routes/auth')));
 app.use('/api/customer-auth', wrapRouter(require('./routes/customerAuth')));
@@ -47,6 +52,7 @@ app.use('/api/orders', wrapRouter(require('./routes/orders')));
 app.use('/api/customers', wrapRouter(require('./routes/customers')));
 app.use('/api/analytics', wrapRouter(require('./routes/analytics')));
 app.use('/api/export', wrapRouter(require('./routes/export')));
+app.use('/api/password-reset', wrapRouter(require('./routes/passwordReset')));
 
 app.post('/api/clear-demo', authRequired, async (req, res) => {
   try {
@@ -89,5 +95,13 @@ process.on('unhandledRejection', (reason) => {
 
 httpServer.listen(PORT, async () => {
   console.log(`Sattwik Kitchen server running on http://localhost:${PORT}`);
+  try {
+    const { logEmailStatusOnStartup } = require('./utils/emailService');
+    logEmailStatusOnStartup();
+  } catch (e) {}
+  try {
+    const { logWhatsAppStatusOnStartup } = require('./utils/whatsappService');
+    logWhatsAppStatusOnStartup();
+  } catch (e) {}
   await ensurePrimaryAdmin();
 });

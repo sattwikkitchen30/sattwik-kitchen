@@ -1,6 +1,27 @@
 const navToggle = document.querySelector('.nav-toggle');
 const navLinks = document.querySelector('.nav-links');
 const cart = new Map();
+const originalCartGet = cart.get.bind(cart);
+cart.get = function(key) {
+  const direct = originalCartGet(key);
+  if (direct !== undefined) return direct;
+  if (!key || typeof key !== 'string') return undefined;
+  for (const item of cart.values()) {
+    if (item.displayName === key || item.name === key) return item;
+    if (item.packageType && item.size) {
+      const synthetic = item.packageType === 'curry-only'
+        ? `Curry-Only Package (${item.size.charAt(0).toUpperCase() + item.size.slice(1)})`
+        : `Full Meal Package (${item.size.charAt(0).toUpperCase() + item.size.slice(1)})`;
+      if (synthetic.toLowerCase() === key.toLowerCase()) return item;
+    }
+  }
+  return undefined;
+};
+const originalCartHas = cart.has.bind(cart);
+cart.has = function(key) {
+  if (originalCartHas(key)) return true;
+  return cart.get(key) !== undefined;
+};
 let customRequest = '';
 
 const cartButton = document.getElementById('cartButton');
@@ -914,31 +935,13 @@ function renderDeliveryPlans(plans) {
     return;
   }
   
-  // Group plans by category
+  // Group plans by category in the exact order received from API (creation order)
   const categories = {};
   plans.forEach(plan => {
     if (!categories[plan.category]) {
       categories[plan.category] = [];
     }
     categories[plan.category].push(plan);
-  });
-
-  // Sort plans within each category: Single → Couple → Family (for tiffin plans only)
-  const sizeOrder = { single: 0, couple: 1, family: 2 };
-  Object.keys(categories).forEach(cat => {
-    categories[cat].sort((a, b) => {
-      const orderA = sizeOrder[a.size] ?? 999;
-      const orderB = sizeOrder[b.size] ?? 999;
-      // If both have valid sizes, sort by size order
-      if (orderA !== 999 && orderB !== 999) {
-        return orderA - orderB;
-      }
-      // If one has valid size, it comes first
-      if (orderA !== 999) return -1;
-      if (orderB !== 999) return 1;
-      // If neither has valid size, sort alphabetically by display name
-      return a.displayName.localeCompare(b.displayName);
-    });
   });
 
   // Create category buttons - ensure Full Meal is first/default, then Curry-Only, then others alphabetically
@@ -958,7 +961,7 @@ function renderDeliveryPlans(plans) {
     return `<button class="${index === 0 ? 'active' : ''}" data-plan-category="${cat}">${displayName}</button>`;
   }).join('');
 
-  // Create plan grids for each category
+  // Create plan grids for each category, preserving exact creation order within each category
   container.innerHTML = sortedCategories.map((cat, index) => `
     <div class="plans-grid reveal ${index === 0 ? 'visible' : 'hidden'}" data-plan-grid="${cat}">
       ${categories[cat].map(plan => {
@@ -969,12 +972,17 @@ function renderDeliveryPlans(plans) {
         const featuredClass = (isPopular || isGreatForTwo) ? 'featured' : '';
         const badge = isPopular ? '<div class="popular">POPULAR CHOICE</div>' : '';
         const greatForTwoLabel = isGreatForTwo ? '<div class="great-for-two">GREAT FOR TWO</div>' : '';
+        const formattedPrice = String(plan.price != null ? plan.price : '').trim();
+        const displayPrice = formattedPrice.startsWith('$') ? formattedPrice : `$${formattedPrice}`;
+        const planDisplayName = (plan.displayName && String(plan.displayName).trim())
+          ? String(plan.displayName).trim()
+          : (plan.size ? (plan.size.charAt(0).toUpperCase() + plan.size.slice(1)) : 'Package');
         return `
-          <article class="plan-card ${featuredClass}" data-tiffin-plan="${planId}" data-tiffin-price="${plan.price}" data-tiffin-package-type="${plan.packageType}" data-tiffin-size="${plan.size}" data-tiffin-display-name="${plan.displayName}">
+          <article class="plan-card ${featuredClass}" data-tiffin-plan="${planId}" data-tiffin-plan-id="${plan._id}" data-tiffin-price="${plan.price}" data-tiffin-package-type="${plan.packageType || ''}" data-tiffin-size="${plan.size}" data-tiffin-display-name="${escapeProductHtml(planDisplayName)}">
             ${badge}
             ${greatForTwoLabel}
-            <div class="plan-top"><span>${plan.size.charAt(0).toUpperCase() + plan.size.slice(1)}</span><strong>$${plan.price}</strong></div>
-            <p>${plan.description || plan.displayName}</p>
+            <div class="plan-top"><span>${escapeProductHtml(planDisplayName)}</span><strong>${displayPrice}</strong></div>
+            <p>${escapeProductHtml(plan.description || planDisplayName)}</p>
             <ul>${itemsList}</ul>
             <div class="plan-actions">
               <div class="qty-control">
@@ -1009,17 +1017,12 @@ function renderDeliveryPlans(plans) {
   // Add plan event listeners
   container.querySelectorAll('.plan-card').forEach(card => {
     const planId = card.dataset.tiffinPlan;
+    const planRecordId = card.dataset.tiffinPlanId;
     const price = Number(card.dataset.tiffinPrice);
-    const packageType = card.dataset.tiffinPackageType;
+    const packageType = card.dataset.tiffinPackageType || null;
     const size = card.dataset.tiffinSize;
-    const displayName = card.querySelector('.plan-top span')?.textContent || size;
-    
-    // Generate plan name for cart key (backward compatible with order logic)
-    const planName = packageType === 'full' 
-      ? `Full Meal Package (${displayName.charAt(0).toUpperCase() + displayName.slice(1)})`
-      : packageType === 'curry-only'
-      ? `Curry-Only Package (${displayName.charAt(0).toUpperCase() + displayName.slice(1)})`
-      : `${planId}`;
+    const displayName = card.dataset.tiffinDisplayName || card.querySelector('.plan-top span')?.textContent || size;
+    const planName = displayName;
     
     const minus = card.querySelector('.qty-minus');
     const plus = card.querySelector('.qty-plus');
@@ -1027,17 +1030,17 @@ function renderDeliveryPlans(plans) {
     
     minus.addEventListener('click', () => {
       const currentQty = cart.get(planName)?.qty || 0;
-      updateQty(planName, price, Math.max(0, currentQty - 1), null, 'tiffin', packageType, size);
+      updateQty(planName, price, Math.max(0, currentQty - 1), null, 'tiffin', packageType, size, planRecordId, displayName);
     });
     
     plus.addEventListener('click', () => {
       const currentQty = cart.get(planName)?.qty || 0;
-      updateQty(planName, price, currentQty + 1, null, 'tiffin', packageType, size);
+      updateQty(planName, price, currentQty + 1, null, 'tiffin', packageType, size, planRecordId, displayName);
     });
     
     choose.addEventListener('click', () => {
       const currentQty = cart.get(planName)?.qty || 0;
-      updateQty(planName, price, currentQty + 1, null, 'tiffin', packageType, size);
+      updateQty(planName, price, currentQty + 1, null, 'tiffin', packageType, size, planRecordId, displayName);
     });
   });
   

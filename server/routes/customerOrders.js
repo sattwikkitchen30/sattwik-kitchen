@@ -15,6 +15,8 @@ function serializeOrder(order) {
   const currentOrder = withCurrentDeliveryStatus(order);
   const customerOrder = { ...currentOrder };
   customerOrder.customer = getOrderCustomer(customerOrder);
+  customerOrder.customerDoc = customerOrder.customer;
+  customerOrder.deliveryAddress = customerOrder.customer.address || customerOrder.customer.area || customerOrder.deliveryAddress || customerOrder.customerSnapshot?.address || '';
   return {
     ...customerOrder,
     pickupDate: formatDateKey(customerOrder.pickupDate),

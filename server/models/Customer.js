@@ -8,6 +8,8 @@ const customerSchema = new mongoose.Schema({
   area: { type: String, default: '', trim: true },
   address: { type: String, default: '', trim: true },
   passwordHash: { type: String, default: '', select: false },
+  passwordChangedAt: { type: Date },
+  tokenVersion: { type: Number, default: 0 },
   isDemo: { type: Boolean, default: false }
 }, { timestamps: true });
 

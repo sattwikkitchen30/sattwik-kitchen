@@ -7,7 +7,7 @@ const { authRequired } = require('../middleware/auth');
 // Get active delivery plans (public - for customer catalog)
 router.get('/public', async (req, res) => {
   try {
-    const plans = await DeliveryPlan.find({ active: true }).sort({ category: 1, size: 1 }).lean();
+    const plans = await DeliveryPlan.find({ active: true }).sort({ createdAt: 1, _id: 1 }).lean();
     res.json({ plans });
   } catch (err) {
     console.error('[deliveryPlans] public list failed:', err.message);
@@ -18,7 +18,7 @@ router.get('/public', async (req, res) => {
 // Get all delivery plans (admin only)
 router.get('/', authRequired, async (req, res) => {
   try {
-    const plans = await DeliveryPlan.find({}).sort({ category: 1, packageType: 1, size: 1 }).lean();
+    const plans = await DeliveryPlan.find({}).sort({ createdAt: 1, _id: 1 }).lean();
     res.json({ plans });
   } catch (err) {
     console.error('[deliveryPlans] list failed:', err.message);
@@ -30,7 +30,7 @@ router.get('/', authRequired, async (req, res) => {
 router.get('/category/:category', authRequired, async (req, res) => {
   try {
     const { category } = req.params;
-    const plans = await DeliveryPlan.find({ category }).sort({ packageType: 1, size: 1 }).lean();
+    const plans = await DeliveryPlan.find({ category }).sort({ createdAt: 1, _id: 1 }).lean();
     res.json({ plans });
   } catch (err) {
     console.error('[deliveryPlans] category list failed:', err.message);

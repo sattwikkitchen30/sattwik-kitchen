@@ -170,34 +170,83 @@ async function createOrder(req, res) {
     orderType = 'tiffin';
 
     for (const tp of tiffinPlans) {
-      if (!tp || !tp.packageType || !tp.size) continue;
-      const packagePrices = Object.prototype.hasOwnProperty.call(TIFFIN_PRICES, tp.packageType)
+      if (!tp || (!tp.packageType && !tp.size && !tp.displayName && !tp.planId)) continue;
+
+      let planRecord = null;
+      if (tp.planId && mongoose.isValidObjectId(tp.planId)) {
+        planRecord = await DeliveryPlan.findById(tp.planId).lean();
+      }
+      if (!planRecord && tp.displayName) {
+        planRecord = await DeliveryPlan.findOne({ displayName: String(tp.displayName).trim() }).lean();
+      }
+      if (!planRecord && tp.packageType && tp.size) {
+        planRecord = await DeliveryPlan.findOne({
+          category: tp.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal',
+          size: tp.size
+        }).lean();
+        if (!planRecord) {
+          planRecord = await DeliveryPlan.findOne({
+            $or: [
+              { packageType: tp.packageType, size: tp.size },
+              { size: tp.size }
+            ]
+          }).lean();
+        }
+      }
+
+      const packagePrices = tp.packageType && Object.prototype.hasOwnProperty.call(TIFFIN_PRICES, tp.packageType)
         ? TIFFIN_PRICES[tp.packageType]
         : null;
-      const price = packagePrices && Object.prototype.hasOwnProperty.call(packagePrices, tp.size)
+      let price = packagePrices && Object.prototype.hasOwnProperty.call(packagePrices, tp.size)
         ? packagePrices[tp.size]
         : null;
+
+      if (!price && planRecord && typeof planRecord.price === 'number') {
+        price = planRecord.price;
+      }
+      if (!price && typeof tp.price === 'number' && tp.price > 0) {
+        price = tp.price;
+      }
+
       if (!price) {
         return res.status(400).json({ message: 'Invalid tiffin plan selection.' });
       }
       const quantity = Math.max(1, parseInt(tp.quantity, 10) || 1);
-      const normalizedPlan = { ...tp, packageType: String(tp.packageType), size: String(tp.size), quantity };
+      const normalizedPlan = {
+        ...tp,
+        packageType: planRecord?.packageType || (tp.packageType ? String(tp.packageType) : null),
+        size: planRecord?.size || (tp.size ? String(tp.size) : 'standard'),
+        quantity
+      };
       normalizedTiffinPlans.push(normalizedPlan);
-      const name = tiffinDisplayName(normalizedPlan.packageType, normalizedPlan.size);
+
+      // Display name resolution: exact unmutated displayName entered by admin
+      let name = (tp.displayName && String(tp.displayName).trim()) || '';
+      if (!name && planRecord && planRecord.displayName) {
+        name = planRecord.displayName.trim();
+      }
+      if (!name) {
+        name = tiffinDisplayName(normalizedPlan.packageType, normalizedPlan.size);
+      }
 
       const subtotal = price * quantity;
       totalAmount += subtotal;
       orderItems.push({
         productId: null,
         productName: name,
-        category: 'Tiffin Plans',
+        category: (planRecord && planRecord.category) || 'Tiffin Plans',
         priceAtPurchase: price,
         quantity,
         subtotal,
         fulfillment: 'delivery',
         deliveryStatus: 'PENDING'
       });
-      tiffinPlanMeta = { packageType: normalizedPlan.packageType, size: normalizedPlan.size, price };
+      tiffinPlanMeta = {
+        packageType: normalizedPlan.packageType,
+        size: normalizedPlan.size,
+        price,
+        displayName: name
+      };
     }
   }
 
@@ -211,6 +260,17 @@ async function createOrder(req, res) {
     return res.status(400).json({ message: 'Pickup date must be a valid date on or after today.' });
   }
   const pickupDate = selectedOrderDate;
+
+  // ── Delivery Member validation (if provided) ─────────────────────────────
+  const rawDeliveryMemberId = req.body?.deliveryMemberId ? String(req.body.deliveryMemberId).trim() : null;
+  let assignedDeliveryMemberId = null;
+  if (rawDeliveryMemberId) {
+    const DeliveryMember = require('../models/DeliveryMember');
+    const member = await DeliveryMember.findById(rawDeliveryMemberId);
+    if (!member) return res.status(400).json({ message: 'Delivery member not found' });
+    if (!member.active) return res.status(400).json({ message: 'Cannot assign order to an inactive delivery member' });
+    assignedDeliveryMemberId = member._id;
+  }
 
   const deliveryDates = fulfillment !== 'pickup'
     ? getSubscriptionServiceDates(selectedOrderDate)
@@ -278,6 +338,7 @@ async function createOrder(req, res) {
     subscriptionEndDate: deliveryDates?.endDate || null,
     deliveryStatusDate: deliveryDates?.serviceDates[0] || null,
     deliveryAddress: address || area,
+    deliveryMemberId: assignedDeliveryMemberId,
     status: 'PENDING',
     placedAt: new Date()
   });
@@ -323,6 +384,8 @@ async function createOrder(req, res) {
   emitOrderUpdate(req.app, populated);
   const responseOrder = populated.toObject();
   responseOrder.customer = getOrderCustomer(responseOrder);
+  responseOrder.customerDoc = responseOrder.customer;
+  responseOrder.deliveryAddress = responseOrder.customer.address || responseOrder.customer.area || responseOrder.deliveryAddress || responseOrder.customerSnapshot?.address || '';
   responseOrder.pickupDate = formatDateKey(populated.pickupDate);
   responseOrder.subscriptionStartDate = formatDateKey(populated.subscriptionStartDate);
   responseOrder.subscriptionEndDate = formatDateKey(populated.subscriptionEndDate);
@@ -411,16 +474,27 @@ async function createManualOrder(req, res) {
   }
   const pickupDate = selectedOrderDate;
 
+  // ── Delivery Member validation (if provided) ─────────────────────────────
+  const rawDeliveryMemberId = req.body?.deliveryMemberId ? String(req.body.deliveryMemberId).trim() : null;
+  let assignedDeliveryMemberId = null;
+  if (rawDeliveryMemberId) {
+    const DeliveryMember = require('../models/DeliveryMember');
+    const member = await DeliveryMember.findById(rawDeliveryMemberId);
+    if (!member) return res.status(400).json({ message: 'Delivery member not found' });
+    if (!member.active) return res.status(400).json({ message: 'Cannot assign order to an inactive delivery member' });
+    assignedDeliveryMemberId = member._id;
+  }
+
   // ── Build order items: stock-check and decrement pickup products ──────────
   const orderItems = [];
   const stockChanges = new Map(); // productId -> quantity decremented (for rollback)
   
   // ── Add subscription plan items to order items ───────────────────────────
   for (const { plan, quantity: planQty } of validatedPlans) {
-    const planName = plan.displayName || plan.size;
     const packageLabel = plan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal';
-    const sizeLabel = plan.size.charAt(0).toUpperCase() + plan.size.slice(1);
-    const productName = `${packageLabel} (${sizeLabel})`;
+    const sizeLabel = plan.size ? (plan.size.charAt(0).toUpperCase() + plan.size.slice(1)) : '';
+    const fallbackName = sizeLabel ? `${packageLabel} (${sizeLabel})` : packageLabel;
+    const productName = plan.displayName || fallbackName;
     
     orderItems.push({
       productId: null,
@@ -534,7 +608,8 @@ async function createManualOrder(req, res) {
     detectedTiffinPlan = {
       packageType: primaryPlan.packageType,
       size: primaryPlan.size,
-      price: Number(primaryPlan.price)
+      price: Number(primaryPlan.price),
+      displayName: primaryPlan.displayName
     };
   } else if (hasDelivery) {
     // Fallback to regex detection for backward compatibility with orders created without explicit plans
@@ -580,6 +655,7 @@ async function createManualOrder(req, res) {
       subscriptionEndDate: subscriptionDates?.endDate || null,
       deliveryStatusDate: subscriptionDates?.serviceDates?.[0] || null,
       deliveryAddress: String(address || customer.address || customer.area || '').trim(),
+      deliveryMemberId: assignedDeliveryMemberId,
       status: 'PENDING',
       placedAt: new Date()
     });
@@ -750,8 +826,8 @@ async function listOrders(req, res) {
       $set: {
         customerDoc: {
           $mergeObjects: [
-            { $ifNull: ['$customerDoc', {}] },
-            { $ifNull: ['$customerSnapshot', {}] }
+            { $ifNull: ['$customerSnapshot', {}] },
+            { $ifNull: ['$customerDoc', {}] }
           ]
         }
       }
@@ -920,8 +996,16 @@ async function listOrders(req, res) {
         subscriptionStartDate: deliveryStartDate,
         subscriptionEndDate: order.subscriptionEndDate || derivedDeliveryDates?.endDate
       });
+      const resolvedCustomer = getOrderCustomer({
+        customer: order.customerDoc,
+        customerSnapshot: order.customerSnapshot
+      });
+      const resolvedAddress = resolvedCustomer.address || resolvedCustomer.area || order.deliveryAddress || order.customerSnapshot?.address || '';
       return {
         ...deliveryStatusOrder,
+        customer: resolvedCustomer,
+        customerDoc: resolvedCustomer,
+        deliveryAddress: resolvedAddress,
         orderAmount: order.orderAmount ?? order.totalAmount,
         pickupDate: formatDateKey(order.pickupDate),
         subscriptionStartDate: formatDateKey(deliveryStartDate),
@@ -939,7 +1023,7 @@ async function listOrders(req, res) {
 
 async function getOrder(req, res) {
   try { await expireSubscriptionOrders(Order, { now: new Date(), app: req.app }); } catch (e) { /* ignore */ }
-  const order = await Order.findById(req.params.id).populate('customer', 'firstName lastName phone email area');
+  const order = await Order.findById(req.params.id).populate('customer', 'firstName lastName phone email address area');
   if (!order) return res.status(404).json({ message: 'Order not found' });
   const responseOrder = order.toObject();
   Object.assign(responseOrder, withCurrentDeliveryStatus(responseOrder));
@@ -1371,7 +1455,7 @@ async function assignDeliveryMember(req, res) {
   const DeliveryMember = require('../models/DeliveryMember');
   const deliveryMember = await DeliveryMember.findById(deliveryMemberId);
   if (!deliveryMember) return res.status(404).json({ message: 'Delivery member not found' });
-  if (!deliveryMember.active) return res.status(400).json({ message: 'Delivery member is inactive' });
+  if (!deliveryMember.active) return res.status(400).json({ message: 'Cannot assign order to an inactive delivery member' });
 
   const deliveryItems = (order.items || []).filter((item) => item.fulfillment === 'delivery');
   if (!deliveryItems.length) {

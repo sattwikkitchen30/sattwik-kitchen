@@ -108,6 +108,18 @@ function isSubscriptionFullyComplete(order) {
 
 // ─── Tiffin name helper ───────────────────────────────────────────────────────
 function tiffinPlanName(item, order, deliveryItems) {
+  if (item.displayName && String(item.displayName).trim()) {
+    return item.displayName.trim();
+  }
+  if (order.tiffinPlan?.displayName && String(order.tiffinPlan.displayName).trim()) {
+    return order.tiffinPlan.displayName.trim();
+  }
+  if (item.productName && !/^tiffin plan$/i.test(item.productName.trim())) {
+    const legacySyntheticMatch = item.productName.match(/^Tiffin Plan\s*[-—–:]\s*(?:Full Meal Package|Curry(?:-|\s+)Only Package)\s*\((Single|Couple|Family)\)/i);
+    if (!legacySyntheticMatch) {
+      return item.productName;
+    }
+  }
   const identifiers = [
     item.packageType, item.planType, item.planName, item.planId, item.productName
   ].filter(Boolean).join(' ').toLowerCase();
@@ -665,6 +677,212 @@ document.getElementById('logoutButton')?.addEventListener('click', async () => {
   window.location.href = '/';
 });
 
+
+// ─── Customer Edit Profile ──────────────────────────────────────────────────
+let currentCustomerData = null;
+try {
+  const stored = localStorage.getItem('sattwikCustomer');
+  if (stored) currentCustomerData = JSON.parse(stored);
+} catch (_e) {
+  currentCustomerData = null;
+}
+
+const customerProfileModal = document.getElementById('customerProfileModal');
+const customerEditProfileBtn = document.getElementById('customerEditProfileBtn');
+const closeCustomerProfileModal = document.getElementById('closeCustomerProfileModal');
+const cancelCustomerProfileBtn = document.getElementById('cancelCustomerProfileBtn');
+const customerProfileForm = document.getElementById('customerProfileForm');
+const customerProfileMessage = document.getElementById('customerProfileMessage');
+const editCustomerFirstName = document.getElementById('editCustomerFirstName');
+const editCustomerLastName = document.getElementById('editCustomerLastName');
+const editCustomerEmail = document.getElementById('editCustomerEmail');
+const editCustomerPhone = document.getElementById('editCustomerPhone');
+const editCustomerArea = document.getElementById('editCustomerArea');
+const editCustomerAddress = document.getElementById('editCustomerAddress');
+const saveCustomerProfileBtn = document.getElementById('saveCustomerProfileBtn');
+
+async function fetchLatestCustomerProfile() {
+  if (!token) return null;
+  try {
+    const res = await fetch('/api/customer-auth/me', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.customer) {
+        currentCustomerData = data.customer;
+        localStorage.setItem('sattwikCustomer', JSON.stringify(data.customer));
+        return data.customer;
+      }
+    }
+  } catch (_e) {
+    // Fall back to current cached data
+  }
+  return currentCustomerData;
+}
+
+function populateCustomerProfileForm(cust) {
+  const c = cust || currentCustomerData || {};
+  if (editCustomerFirstName) editCustomerFirstName.value = c.firstName || '';
+  if (editCustomerLastName) editCustomerLastName.value = c.lastName || '';
+  if (editCustomerEmail) editCustomerEmail.value = c.email || '';
+  if (editCustomerPhone) editCustomerPhone.value = c.phone || '';
+  if (editCustomerArea) editCustomerArea.value = c.area || '';
+  if (editCustomerAddress) editCustomerAddress.value = c.address || '';
+}
+
+function openCustomerProfileModal() {
+  if (!customerProfileModal) return;
+  customerProfileModal.style.display = 'flex';
+  if (customerProfileMessage) {
+    customerProfileMessage.textContent = '';
+    customerProfileMessage.className = 'profile-message';
+  }
+  if (saveCustomerProfileBtn) {
+    saveCustomerProfileBtn.disabled = false;
+    saveCustomerProfileBtn.textContent = 'Save Changes';
+  }
+
+  populateCustomerProfileForm(currentCustomerData);
+
+  // Background fetch to ensure latest data is loaded
+  fetchLatestCustomerProfile().then((fresh) => {
+    if (fresh && customerProfileModal.style.display === 'flex') {
+      if (editCustomerFirstName && document.activeElement !== editCustomerFirstName) editCustomerFirstName.value = fresh.firstName || '';
+      if (editCustomerLastName && document.activeElement !== editCustomerLastName) editCustomerLastName.value = fresh.lastName || '';
+      if (editCustomerEmail && document.activeElement !== editCustomerEmail) editCustomerEmail.value = fresh.email || '';
+      if (editCustomerPhone && document.activeElement !== editCustomerPhone) editCustomerPhone.value = fresh.phone || '';
+      if (editCustomerArea && document.activeElement !== editCustomerArea) editCustomerArea.value = fresh.area || '';
+      if (editCustomerAddress && document.activeElement !== editCustomerAddress) editCustomerAddress.value = fresh.address || '';
+    }
+  });
+
+  setTimeout(() => {
+    if (editCustomerFirstName) editCustomerFirstName.focus();
+  }, 80);
+}
+
+function closeCustomerProfileModalDialog() {
+  if (!customerProfileModal) return;
+  customerProfileModal.style.display = 'none';
+  if (customerProfileMessage) {
+    customerProfileMessage.textContent = '';
+    customerProfileMessage.className = 'profile-message';
+  }
+  populateCustomerProfileForm(currentCustomerData);
+}
+
+customerEditProfileBtn?.addEventListener('click', openCustomerProfileModal);
+closeCustomerProfileModal?.addEventListener('click', closeCustomerProfileModalDialog);
+cancelCustomerProfileBtn?.addEventListener('click', closeCustomerProfileModalDialog);
+
+customerProfileModal?.addEventListener('click', (e) => {
+  if (e.target === customerProfileModal) closeCustomerProfileModalDialog();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && customerProfileModal && customerProfileModal.style.display === 'flex') {
+    closeCustomerProfileModalDialog();
+  }
+});
+
+customerProfileForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (customerProfileMessage) {
+    customerProfileMessage.textContent = 'Saving changes...';
+    customerProfileMessage.className = 'profile-message';
+  }
+  if (saveCustomerProfileBtn) {
+    saveCustomerProfileBtn.disabled = true;
+    saveCustomerProfileBtn.textContent = 'Saving...';
+  }
+
+  const firstName = editCustomerFirstName ? editCustomerFirstName.value.trim() : '';
+  const lastName = editCustomerLastName ? editCustomerLastName.value.trim() : '';
+  const email = editCustomerEmail ? editCustomerEmail.value.trim().toLowerCase() : '';
+  const phone = editCustomerPhone ? editCustomerPhone.value.trim() : '';
+  const area = editCustomerArea ? editCustomerArea.value.trim() : '';
+  const address = editCustomerAddress ? editCustomerAddress.value.trim() : '';
+
+  // Validation
+  if (!firstName) {
+    customerProfileMessage.textContent = 'First name is required.';
+    customerProfileMessage.className = 'profile-message error';
+    saveCustomerProfileBtn.disabled = false;
+    saveCustomerProfileBtn.textContent = 'Save Changes';
+    return;
+  }
+  if (!lastName) {
+    customerProfileMessage.textContent = 'Last name is required.';
+    customerProfileMessage.className = 'profile-message error';
+    saveCustomerProfileBtn.disabled = false;
+    saveCustomerProfileBtn.textContent = 'Save Changes';
+    return;
+  }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    customerProfileMessage.textContent = 'Please provide a valid email address.';
+    customerProfileMessage.className = 'profile-message error';
+    saveCustomerProfileBtn.disabled = false;
+    saveCustomerProfileBtn.textContent = 'Save Changes';
+    return;
+  }
+  if (!phone || !/^[\d+\-()\s]{7,40}$/.test(phone)) {
+    customerProfileMessage.textContent = 'Please provide a valid phone number.';
+    customerProfileMessage.className = 'profile-message error';
+    saveCustomerProfileBtn.disabled = false;
+    saveCustomerProfileBtn.textContent = 'Save Changes';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/customer-auth/profile', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ firstName, lastName, email, phone, area, address })
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to update profile.');
+    }
+
+    if (data.customer) {
+      currentCustomerData = data.customer;
+      localStorage.setItem('sattwikCustomer', JSON.stringify(data.customer));
+    }
+    if (data.token) {
+      localStorage.setItem('sattwikCustomerToken', data.token);
+    }
+
+    customerProfileMessage.textContent = data.message || 'Profile updated successfully!';
+    customerProfileMessage.className = 'profile-message success';
+    saveCustomerProfileBtn.disabled = false;
+    saveCustomerProfileBtn.textContent = 'Saved!';
+
+    setTimeout(() => {
+      if (customerProfileModal && customerProfileModal.style.display === 'flex') {
+        closeCustomerProfileModalDialog();
+      }
+      if (typeof loadOrders === 'function') {
+        loadOrders();
+      }
+    }, 1400);
+  } catch (error) {
+    customerProfileMessage.textContent = error.message || 'Could not update profile';
+    customerProfileMessage.className = 'profile-message error';
+    saveCustomerProfileBtn.disabled = false;
+    saveCustomerProfileBtn.textContent = 'Save Changes';
+  }
+});
+
+// Prime profile data on load
+if (token) {
+  fetchLatestCustomerProfile();
+}
+
 // ─── Real-time updates ────────────────────────────────────────────────────────
 const socket = window.io ? io({ auth: { token } }) : null;
 socket?.on('order:updated', (updatedOrder) => {
@@ -690,6 +908,9 @@ document.addEventListener('visibilitychange', () => {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    openCustomerProfileModal,
+    closeCustomerProfileModalDialog,
+    populateCustomerProfileForm,
     renderFeedbackSection,
     getCustomerOrderComments,
     extractComponents,

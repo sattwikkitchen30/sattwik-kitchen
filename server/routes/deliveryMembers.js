@@ -4,6 +4,7 @@ const DeliveryMember = require('../models/DeliveryMember');
 const Order = require('../models/Order');
 const { authRequired } = require('../middleware/auth');
 const { deliveryAuthRequired } = require('../middleware/deliveryAuth');
+const { updateDeliveryMemberProfile } = require('./deliveryAuth');
 const { getMemberDeliveryHistory, getMemberDeliveryCount, deleteMemberDeliveryHistory } = require('../utils/deliveryHistory');
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -144,10 +145,27 @@ router.post('/', authRequired, async (req, res) => {
   }
 });
 
+// Update current delivery member's own profile
+router.put('/me', deliveryAuthRequired, updateDeliveryMemberProfile);
+
 // Update delivery member (admin only)
 router.put('/:id', authRequired, async (req, res) => {
   try {
     const { name, email, phone, active } = req.body || {};
+
+    const member = await DeliveryMember.findById(req.params.id);
+    if (!member) return res.status(404).json({ message: 'Delivery member not found' });
+
+    // Status-only update (when name, email, and phone are not provided)
+    if (active !== undefined && name === undefined && email === undefined && phone === undefined) {
+      member.active = Boolean(active);
+      await member.save();
+      return res.json({
+        message: member.active ? 'Delivery member activated successfully' : 'Delivery member deactivated successfully',
+        member: publicMember(member)
+      });
+    }
+
     const cleanName = String(name || '').trim();
     const cleanEmail = String(email || '').trim().toLowerCase();
     const cleanPhone = String(phone || '').trim();
@@ -157,9 +175,6 @@ router.put('/:id', authRequired, async (req, res) => {
     if (!EMAIL_PATTERN.test(cleanEmail)) return res.status(400).json({ message: 'Enter a valid email address' });
     if (!cleanPhone) return res.status(400).json({ message: 'Phone number is required' });
 
-    const member = await DeliveryMember.findById(req.params.id);
-    if (!member) return res.status(404).json({ message: 'Delivery member not found' });
-
     // Check if email is being changed and if it conflicts with another member
     if (member.email !== cleanEmail && await DeliveryMember.exists({ email: cleanEmail, _id: { $ne: req.params.id } })) {
       return res.status(409).json({ message: 'A delivery account already exists for this email' });
@@ -168,7 +183,9 @@ router.put('/:id', authRequired, async (req, res) => {
     member.name = cleanName;
     member.email = cleanEmail;
     member.phone = cleanPhone;
-    member.active = active !== undefined ? Boolean(active) : member.active;
+    if (active !== undefined) {
+      member.active = Boolean(active);
+    }
     await member.save();
 
     res.json({ message: 'Delivery member updated successfully', member: publicMember(member) });
@@ -178,36 +195,47 @@ router.put('/:id', authRequired, async (req, res) => {
   }
 });
 
-// Delete delivery member and all related records (admin only)
+// Toggle delivery member active status (admin only)
+router.patch('/:id/status', authRequired, async (req, res) => {
+  try {
+    const { active } = req.body || {};
+    if (typeof active !== 'boolean') {
+      return res.status(400).json({ message: 'Active status (boolean) is required' });
+    }
+
+    const member = await DeliveryMember.findById(req.params.id);
+    if (!member) return res.status(404).json({ message: 'Delivery member not found' });
+
+    member.active = active;
+    await member.save();
+
+    res.json({
+      message: active ? 'Delivery member activated successfully' : 'Delivery member deactivated successfully',
+      member: publicMember(member)
+    });
+  } catch (err) {
+    console.error('[deliveryMembers] status update failed:', err.message);
+    res.status(500).json({ message: 'Could not update delivery member status' });
+  }
+});
+
+// Soft-delete delivery member: mark inactive without deleting history or order assignments (admin only)
 router.delete('/:id', authRequired, async (req, res) => {
   try {
     const member = await DeliveryMember.findById(req.params.id);
     if (!member) return res.status(404).json({ message: 'Delivery member not found' });
-    
-    // Delete delivery history for this member
-    const historyResult = await deleteMemberDeliveryHistory(req.params.id);
-    if (historyResult.error) {
-      console.error('[deliveryMembers] failed to delete delivery history:', historyResult.error);
-      return res.status(500).json({ message: 'Could not delete delivery history' });
-    }
-    
-    // Clear delivery member assignment from orders
-    const orderUpdateResult = await Order.updateMany(
-      { deliveryMemberId: req.params.id },
-      { $unset: { deliveryMemberId: 1 } }
-    );
-    
-    // Delete the member
-    await DeliveryMember.findByIdAndDelete(req.params.id);
-    
-    res.json({ 
-      message: 'Delivery member deleted successfully',
-      deletedHistoryCount: historyResult.deletedCount,
-      updatedOrdersCount: orderUpdateResult.modifiedCount
+
+    // Soft delete: mark inactive
+    member.active = false;
+    await member.save();
+
+    res.json({
+      message: 'Delivery member deactivated successfully',
+      member: publicMember(member)
     });
   } catch (err) {
-    console.error('[deliveryMembers] delete failed:', err.message);
-    res.status(500).json({ message: 'Could not delete the delivery member' });
+    console.error('[deliveryMembers] deactivate failed:', err.message);
+    res.status(500).json({ message: 'Could not deactivate the delivery member' });
   }
 });
 

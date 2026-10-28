@@ -17,6 +17,7 @@
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.2",
     "mongoose": "^8.4.0",
+    "nodemailer": "^10.2.1",
     "socket.io": "^4.8.3"
   }
 }

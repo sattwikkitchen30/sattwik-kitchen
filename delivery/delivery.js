@@ -1,6 +1,11 @@
 const deliveryToken = localStorage.getItem('sattwikDeliveryToken');
 const isDeliveryLogin = Boolean(document.getElementById('deliveryLoginForm'));
 const deliveryMessage = document.getElementById('deliveryMessage');
+let currentDeliveryMember = null;
+try {
+  const cached = localStorage.getItem('sattwikDeliveryMember');
+  if (cached) currentDeliveryMember = JSON.parse(cached);
+} catch (e) {}
 
 async function deliveryApi(path, options = {}) {
   const response = await fetch(`/api${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${deliveryToken}`, ...(options.headers || {}) } });
@@ -48,7 +53,7 @@ function orderCard(order) {
   const activeLabel = ['ACCEPTED', 'OUT_FOR_DELIVERY'].includes(order.status) ? '<strong class="active-delivery-label">MY ACTIVE DELIVERY</strong>' : '';
   const acceptedTime = order.acceptedAt ? `<div><strong>Accepted</strong><br>${new Date(order.acceptedAt).toLocaleString('en-US', { timeZone: 'America/Vancouver' })}</div>` : '';
   const terminal = ['DELIVERED', 'CANCELLED'].includes(order.status) || Boolean(order.firstDeliveredAt || order.deliveredAt);
-  return `<article class="delivery-order assigned-delivery" data-delivery-order="${escapeHtml(order._id)}">${activeLabel}<div class="delivery-order-head"><div><h2>${escapeHtml(order.orderId)}</h2><p>${escapeHtml(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())} • ${escapeHtml(customer.phone || '')}<br>${escapeHtml(customer.email || '')}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${escapeHtml(order.deliveryAddress || customer.address || customer.area || 'Not provided')}</div><div><strong>Current status</strong><br>${escapeHtml(deliveryStatusLabel(order.status))}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${escapeHtml(order._id)}" data-next-status="${escapeHtml(next || '')}" ${next ? '' : 'disabled'}>${escapeHtml(actionText || 'Complete')}</button><button type="button" data-cancel-delivery="${escapeHtml(order._id)}" ${terminal ? 'disabled' : ''}>Cancel Order</button></div></article>`;
+  return `<article class="delivery-order assigned-delivery" data-delivery-order="${escapeHtml(order._id)}">${activeLabel}<div class="delivery-order-head"><div><h2>${escapeHtml(order.orderId)}</h2><p>${escapeHtml(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())} • ${escapeHtml(customer.phone || '')}<br>${escapeHtml(customer.email || '')}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${escapeHtml(customer.address || customer.area || order.deliveryAddress || 'Not provided')}</div><div><strong>Current status</strong><br>${escapeHtml(deliveryStatusLabel(order.status))}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${escapeHtml(order._id)}" data-next-status="${escapeHtml(next || '')}" ${next ? '' : 'disabled'}>${escapeHtml(actionText || 'Complete')}</button><button type="button" data-cancel-delivery="${escapeHtml(order._id)}" ${terminal ? 'disabled' : ''}>Cancel Order</button></div></article>`;
 }
 
 async function loadDeliveryOrders() {
@@ -82,54 +87,227 @@ if (!isDeliveryLogin) loadDeliveryOrders();
 
 document.getElementById('deliveryLogout')?.addEventListener('click', () => { localStorage.removeItem('sattwikDeliveryToken'); localStorage.removeItem('sattwikDeliveryMember'); window.location.href = '/delivery/login.html'; });
 
-// Change password functionality
-const changePasswordModal = document.getElementById('changePasswordModal');
-const changePasswordBtn = document.getElementById('changePasswordBtn');
-const closePasswordModal = document.getElementById('closePasswordModal');
-const changePasswordForm = document.getElementById('changePasswordForm');
-const passwordMessage = document.getElementById('passwordMessage');
+// Edit Profile & Unified Password Change Functionality
+const editProfileModal = document.getElementById('editProfileModal');
+const editProfileBtn = document.getElementById('editProfileBtn');
+const closeProfileModal = document.getElementById('closeProfileModal');
+const cancelProfileBtn = document.getElementById('cancelProfileBtn');
+const editProfileForm = document.getElementById('editProfileForm');
+const editProfileMessage = document.getElementById('editProfileMessage');
+const editProfileName = document.getElementById('editProfileName');
+const editProfileEmail = document.getElementById('editProfileEmail');
+const editProfilePhone = document.getElementById('editProfilePhone');
+const editCurrentPassword = document.getElementById('editCurrentPassword');
+const editNewPassword = document.getElementById('editNewPassword');
+const editConfirmPassword = document.getElementById('editConfirmPassword');
+const saveProfileBtn = document.getElementById('saveProfileBtn');
 
-changePasswordBtn?.addEventListener('click', () => {
-  changePasswordModal.style.display = 'block';
-  changePasswordForm.reset();
-  passwordMessage.textContent = '';
+function openEditProfileModal(focusPassword = false) {
+  if (!editProfileModal) return;
+  editProfileModal.style.display = 'block';
+  if (editProfileMessage) {
+    editProfileMessage.textContent = '';
+    editProfileMessage.className = 'message';
+  }
+  if (saveProfileBtn) {
+    saveProfileBtn.disabled = false;
+    saveProfileBtn.textContent = 'Save Changes';
+  }
+
+  // Prepopulate with latest known details
+  const member = currentDeliveryMember || {};
+  if (editProfileName) editProfileName.value = member.name || '';
+  if (editProfileEmail) editProfileEmail.value = member.email || '';
+  if (editProfilePhone) editProfilePhone.value = member.phone || '';
+
+  // Clear password inputs
+  if (editCurrentPassword) editCurrentPassword.value = '';
+  if (editNewPassword) editNewPassword.value = '';
+  if (editConfirmPassword) editConfirmPassword.value = '';
+
+  // Fetch fresh details from server in background
+  deliveryApi('/delivery-auth/me').then((data) => {
+    if (data && data.member) {
+      currentDeliveryMember = data.member;
+      if (editProfileName && document.activeElement !== editProfileName) editProfileName.value = data.member.name || '';
+      if (editProfileEmail && document.activeElement !== editProfileEmail) editProfileEmail.value = data.member.email || '';
+      if (editProfilePhone && document.activeElement !== editProfilePhone) editProfilePhone.value = data.member.phone || '';
+    }
+  }).catch(() => {});
+
+  if (focusPassword && editCurrentPassword) {
+    setTimeout(() => editCurrentPassword.focus(), 80);
+  } else if (editProfileName) {
+    setTimeout(() => editProfileName.focus(), 80);
+  }
+}
+
+function closeEditProfileModal() {
+  if (!editProfileModal) return;
+  editProfileModal.style.display = 'none';
+  if (editProfileMessage) {
+    editProfileMessage.textContent = '';
+    editProfileMessage.className = 'message';
+  }
+  // Restore inputs to currently saved member data (discarding unsaved changes)
+  const member = currentDeliveryMember || {};
+  if (editProfileName) editProfileName.value = member.name || '';
+  if (editProfileEmail) editProfileEmail.value = member.email || '';
+  if (editProfilePhone) editProfilePhone.value = member.phone || '';
+  if (editCurrentPassword) editCurrentPassword.value = '';
+  if (editNewPassword) editNewPassword.value = '';
+  if (editConfirmPassword) editConfirmPassword.value = '';
+}
+
+editProfileBtn?.addEventListener('click', () => openEditProfileModal(false));
+closeProfileModal?.addEventListener('click', closeEditProfileModal);
+cancelProfileBtn?.addEventListener('click', closeEditProfileModal);
+
+// Close on backdrop click
+editProfileModal?.addEventListener('click', (e) => {
+  if (e.target === editProfileModal) closeEditProfileModal();
 });
 
-closePasswordModal?.addEventListener('click', () => {
-  changePasswordModal.style.display = 'none';
-});
-
-changePasswordForm?.addEventListener('submit', async (event) => {
+editProfileForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
-  passwordMessage.textContent = 'Updating password...';
+  if (editProfileMessage) {
+    editProfileMessage.textContent = 'Saving changes...';
+    editProfileMessage.className = 'message';
+  }
+  if (saveProfileBtn) {
+    saveProfileBtn.disabled = true;
+    saveProfileBtn.textContent = 'Saving...';
+  }
+
+  const name = editProfileName ? editProfileName.value.trim() : '';
+  const email = editProfileEmail ? editProfileEmail.value.trim() : '';
+  const phone = editProfilePhone ? editProfilePhone.value.trim() : '';
+  const currentPassword = editCurrentPassword ? editCurrentPassword.value : '';
+  const newPassword = editNewPassword ? editNewPassword.value : '';
+  const confirmPassword = editConfirmPassword ? editConfirmPassword.value : '';
+
+  // Client-side validations
+  if (!name) {
+    editProfileMessage.textContent = 'Name is required.';
+    editProfileMessage.className = 'message error';
+    saveProfileBtn.disabled = false;
+    saveProfileBtn.textContent = 'Save Changes';
+    return;
+  }
+  if (!email) {
+    editProfileMessage.textContent = 'Email is required.';
+    editProfileMessage.className = 'message error';
+    saveProfileBtn.disabled = false;
+    saveProfileBtn.textContent = 'Save Changes';
+    return;
+  }
+
+  const hasPasswordInput = Boolean(currentPassword || newPassword || confirmPassword);
+  if (hasPasswordInput) {
+    if (!currentPassword) {
+      editProfileMessage.textContent = 'Current password is required to change password.';
+      editProfileMessage.className = 'message error';
+      saveProfileBtn.disabled = false;
+      saveProfileBtn.textContent = 'Save Changes';
+      return;
+    }
+    if (newPassword.length < 8) {
+      editProfileMessage.textContent = 'New password must be at least 8 characters.';
+      editProfileMessage.className = 'message error';
+      saveProfileBtn.disabled = false;
+      saveProfileBtn.textContent = 'Save Changes';
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      editProfileMessage.textContent = 'New passwords do not match.';
+      editProfileMessage.className = 'message error';
+      saveProfileBtn.disabled = false;
+      saveProfileBtn.textContent = 'Save Changes';
+      return;
+    }
+  }
+
   try {
-    const response = await fetch('/api/delivery-auth/change-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${deliveryToken}` },
-      body: JSON.stringify({
-        currentPassword: document.getElementById('currentPassword').value,
-        newPassword: document.getElementById('newPassword').value,
-        confirmPassword: document.getElementById('confirmPassword').value
-      })
+    const payload = {
+      name,
+      email,
+      phone
+    };
+    if (hasPasswordInput) {
+      payload.currentPassword = currentPassword;
+      payload.newPassword = newPassword;
+      payload.confirmPassword = confirmPassword;
+    }
+
+    const data = await deliveryApi('/delivery-auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(payload)
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Password change failed');
-    passwordMessage.textContent = data.message;
+
+    // Update state and localStorage
+    if (data.member) {
+      currentDeliveryMember = data.member;
+      localStorage.setItem('sattwikDeliveryMember', JSON.stringify(data.member));
+      const nameEl = document.getElementById('memberName');
+      if (nameEl) nameEl.textContent = data.member.name;
+
+      const perfName = document.getElementById('perfMemberName');
+      const perfEmail = document.getElementById('perfMemberEmail');
+      const perfPhone = document.getElementById('perfMemberPhone');
+      if (perfName) perfName.textContent = data.member.name;
+      if (perfEmail) perfEmail.textContent = data.member.email;
+      if (perfPhone) perfPhone.textContent = data.member.phone;
+    }
+
+    if (data.token) {
+      localStorage.setItem('sattwikDeliveryToken', data.token);
+    }
+
+    // Clear password inputs
+    if (editCurrentPassword) editCurrentPassword.value = '';
+    if (editNewPassword) editNewPassword.value = '';
+    if (editConfirmPassword) editConfirmPassword.value = '';
+
+    editProfileMessage.textContent = data.message || 'Profile updated successfully!';
+    editProfileMessage.className = 'message success';
+
     if (data.reauthRequired) {
+      saveProfileBtn.disabled = true;
       setTimeout(() => {
         localStorage.removeItem('sattwikDeliveryToken');
         localStorage.removeItem('sattwikDeliveryMember');
         window.location.href = '/delivery/login.html';
+      }, 1800);
+    } else {
+      saveProfileBtn.disabled = false;
+      saveProfileBtn.textContent = 'Save Changes';
+      setTimeout(() => {
+        if (editProfileModal && editProfileModal.style.display === 'block') {
+          closeEditProfileModal();
+        }
       }, 1500);
     }
   } catch (error) {
-    passwordMessage.textContent = error.message;
+    editProfileMessage.textContent = error.message || 'Could not update profile';
+    editProfileMessage.className = 'message error';
+    saveProfileBtn.disabled = false;
+    saveProfileBtn.textContent = 'Save Changes';
+  }
+});
+
+// Close modal on Escape key press
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && editProfileModal && editProfileModal.style.display === 'block') {
+    closeEditProfileModal();
   }
 });
 
 if (!isDeliveryLogin) {
   deliveryApi('/delivery-auth/me').then((data) => { 
-    document.getElementById('memberName').textContent = data.member.name;
+    currentDeliveryMember = data.member;
+    if (data.member?.name) {
+      document.getElementById('memberName').textContent = data.member.name;
+    }
   }).catch((error) => {
     console.error('Auth failed:', error);
     localStorage.removeItem('sattwikDeliveryToken'); 
@@ -261,7 +439,7 @@ function renderPerfHistoryTable(history) {
           if (delivery.orderType === 'tiffin' && delivery.tiffinPlan) {
             const size = delivery.tiffinPlan.size ? delivery.tiffinPlan.size.charAt(0).toUpperCase() + delivery.tiffinPlan.size.slice(1) : '';
             const type = delivery.tiffinPlan.packageType === 'curry-only' ? 'Curry-Only' : 'Full Meal';
-            itemDisplay = `${type} (${size})`;
+            itemDisplay = delivery.tiffinPlan.displayName || (delivery.items && delivery.items[0]?.productName) || (size ? `${type} (${size})` : type);
           }
           
           return `

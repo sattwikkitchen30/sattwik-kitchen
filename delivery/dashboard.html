@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Delivery Dashboard | Sattwik Kitchen</title><link rel="stylesheet" href="delivery.css"></head>
-<body class="delivery-page"><main class="delivery-main"><header class="delivery-header"><div><p class="eyebrow">DELIVERY MEMBER</p><h1>My Dashboard</h1><p id="memberName"></p></div><div><button class="delivery-button secondary" id="changePasswordBtn">Change Password</button><button class="delivery-button secondary" id="deliveryLogout">Log out</button></div></header><p id="deliveryMessage" class="message"></p>
+<body class="delivery-page"><main class="delivery-main"><header class="delivery-header"><div><p class="eyebrow">DELIVERY MEMBER</p><h1>My Dashboard</h1><p id="memberName"></p></div><div><button class="delivery-button secondary" id="editProfileBtn">Edit Profile</button><button class="delivery-button secondary" id="deliveryLogout">Log out</button></div></header><p id="deliveryMessage" class="message"></p>
 
 <!-- Tab Navigation -->
 <div class="delivery-tabs">
@@ -80,19 +80,62 @@
 
 </main>
 
-<!-- Change Password Modal -->
-<div id="changePasswordModal" class="modal" style="display:none;">
-  <div class="modal-content">
+<!-- Edit Profile Modal -->
+<div id="editProfileModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="editProfileTitle" style="display:none;">
+  <div class="modal-content profile-modal-content">
     <div class="modal-header">
-      <h2>Change Password</h2>
-      <button class="close-modal" id="closePasswordModal">&times;</button>
+      <div>
+        <h2 id="editProfileTitle">Edit Profile</h2>
+        <p class="modal-subtitle">Update your personal information and account security settings.</p>
+      </div>
+      <button type="button" class="close-modal" id="closeProfileModal" aria-label="Close dialog">&times;</button>
     </div>
-    <form id="changePasswordForm">
-      <label>Current Password<input type="password" id="currentPassword" required></label>
-      <label>New Password<input type="password" id="newPassword" required minlength="8"></label>
-      <label>Confirm New Password<input type="password" id="confirmPassword" required minlength="8"></label>
-      <button type="submit" class="delivery-button">Change Password</button>
-      <p id="passwordMessage" class="message"></p>
+    <form id="editProfileForm" novalidate>
+      <fieldset class="profile-section">
+        <legend class="profile-section-heading">Personal Information</legend>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label for="editProfileName">Full Name <span class="required" aria-hidden="true">*</span></label>
+            <input type="text" id="editProfileName" name="name" required autocomplete="name" placeholder="e.g. Ramesh Patel" />
+          </div>
+          <div class="form-group">
+            <label for="editProfileEmail">Email Address <span class="required" aria-hidden="true">*</span></label>
+            <input type="email" id="editProfileEmail" name="email" required autocomplete="email" placeholder="e.g. ramesh@sattwik.com" />
+          </div>
+          <div class="form-group">
+            <label for="editProfilePhone">Phone Number <span class="required" aria-hidden="true">*</span></label>
+            <input type="tel" id="editProfilePhone" name="phone" required autocomplete="tel" placeholder="e.g. (604) 555-0101" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="profile-section">
+        <div class="section-legend-row">
+          <legend class="profile-section-heading">Password &amp; Security</legend>
+          <span class="optional-pill">Optional</span>
+        </div>
+        <p class="field-hint">Leave these fields blank if you do not wish to change your password.</p>
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label for="editCurrentPassword">Current Password</label>
+            <input type="password" id="editCurrentPassword" name="currentPassword" autocomplete="current-password" placeholder="Required only when changing password" />
+          </div>
+          <div class="form-group">
+            <label for="editNewPassword">New Password</label>
+            <input type="password" id="editNewPassword" name="newPassword" minlength="8" autocomplete="new-password" placeholder="Minimum 8 characters" />
+          </div>
+          <div class="form-group">
+            <label for="editConfirmPassword">Confirm New Password</label>
+            <input type="password" id="editConfirmPassword" name="confirmPassword" minlength="8" autocomplete="new-password" placeholder="Re-enter new password" />
+          </div>
+        </div>
+      </fieldset>
+
+      <div class="profile-modal-actions">
+        <button type="submit" class="delivery-button primary" id="saveProfileBtn">Save Changes</button>
+        <button type="button" class="delivery-button secondary" id="cancelProfileBtn">Cancel</button>
+      </div>
+      <p id="editProfileMessage" class="message" role="status" aria-live="polite"></p>
     </form>
   </div>
 </div>

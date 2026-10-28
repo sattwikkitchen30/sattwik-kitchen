@@ -21,9 +21,8 @@ router.get('/', deliveryAuthRequired, async (req, res) => {
     return {
       ...currentOrder,
       customer: getOrderCustomer(currentOrder),
-      deliveryAddress: currentOrder.customerSnapshot
-        ? currentOrder.customerSnapshot.address || currentOrder.customerSnapshot.area || ''
-        : currentOrder.deliveryAddress || currentOrder.customer?.address || currentOrder.customer?.area || '',
+      customerDoc: getOrderCustomer(currentOrder),
+      deliveryAddress: getOrderCustomer(currentOrder).address || getOrderCustomer(currentOrder).area || currentOrder.deliveryAddress || currentOrder.customerSnapshot?.address || '',
       items: currentOrder.items,
       totalAmount: items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
     };
@@ -68,11 +67,30 @@ router.put('/:id/status', deliveryAuthRequired, async (req, res) => {
 
   const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email').lean();
   populated.customer = getOrderCustomer(populated);
-  populated.deliveryAddress = populated.customerSnapshot
-    ? populated.customerSnapshot.address || populated.customerSnapshot.area || ''
-    : populated.deliveryAddress || populated.customer.address || populated.customer.area || '';
+  populated.customerDoc = populated.customer;
+  populated.deliveryAddress = populated.customer.address || populated.customer.area || populated.deliveryAddress || populated.customerSnapshot?.address || '';
+  // Trigger automatic WhatsApp delivery notification when marked as DELIVERED
+  let whatsappNotificationResult = null;
+  if (requested === 'DELIVERED') {
+    try {
+      const { sendDeliveryWhatsAppNotification } = require('../utils/whatsappService');
+      whatsappNotificationResult = await sendDeliveryWhatsAppNotification({
+        order: populated,
+        deliveryMemberId: req.deliveryMember._id,
+        now: new Date()
+      });
+    } catch (notifErr) {
+      console.error('[deliveryOrders] WhatsApp delivery notification failed to process:', notifErr.message);
+      // Delivery status remains successfully DELIVERED — do not revert status
+    }
+  }
+
   emitOrderUpdate(req.app, populated);
-  res.json({ message: requested === 'CANCELLED' ? 'Order cancelled.' : `Order marked as ${requested}`, order: populated });
+  res.json({
+    message: requested === 'CANCELLED' ? 'Order cancelled.' : `Order marked as ${requested}`,
+    order: populated,
+    whatsappNotification: whatsappNotificationResult
+  });
 });
 
 module.exports = router;

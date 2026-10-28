@@ -1,5 +1,7 @@
 const router = require('express').Router();
 const { authRequired } = require('../middleware/auth');
+const { customerAuthRequired } = require('../middleware/customerAuth');
+const { updateCustomerProfile } = require('./customerAuth');
 const Customer = require('../models/Customer');
 const Order = require('../models/Order');
 const mongoose = require('mongoose');
@@ -128,6 +130,30 @@ async function updateCustomer(req, res) {
 
   try {
     await customer.save();
+
+    try {
+      const mongoose = require('mongoose');
+      const Order = require('../models/Order');
+      if (mongoose.connection && mongoose.connection.readyState === 1 && Order && typeof Order.updateMany === 'function') {
+        const orderUpdateFields = {
+          'customerSnapshot.firstName': customer.firstName,
+          'customerSnapshot.lastName': customer.lastName,
+          'customerSnapshot.phone': customer.phone,
+          'customerSnapshot.email': customer.email,
+          'customerSnapshot.area': customer.area,
+          'customerSnapshot.address': customer.address
+        };
+        if (customer.address) {
+          orderUpdateFields.deliveryAddress = customer.address;
+        }
+        await Order.updateMany(
+          { $or: [{ customer: customer._id }, { customerId: customer._id }] },
+          { $set: orderUpdateFields }
+        );
+      }
+    } catch (_orderSyncErr) {
+      // Don't fail customer profile update if order synchronization throws
+    }
     return res.json({
       message: 'Customer updated successfully',
       customer: {
@@ -153,6 +179,9 @@ async function updateCustomer(req, res) {
     throw err;
   }
 }
+
+// Customer self-service profile update
+router.put('/me', customerAuthRequired, updateCustomerProfile);
 
 router.put('/:id', authRequired, updateCustomer);
 router.patch('/:id', authRequired, updateCustomer);

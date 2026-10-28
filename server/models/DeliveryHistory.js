@@ -22,6 +22,18 @@ const deliveryHistorySchema = new mongoose.Schema({
       packageType: { type: String, enum: ['full', 'curry-only'], default: null },
       size: { type: String, enum: ['single', 'couple', 'family'], default: null }
     }
+  },
+  whatsappNotification: {
+    sent: { type: Boolean, default: false },
+    sentAt: { type: Date, default: null },
+    recipientPhone: { type: String, default: '' },
+    messageId: { type: String, default: null },
+    status: { type: String, enum: ['pending', 'sent', 'failed', 'unconfigured', 'skipped'], default: 'pending' },
+    error: { type: String, default: null },
+    provider: { type: String, default: null },
+    messageBody: { type: String, default: null },
+    attempts: { type: Number, default: 0 },
+    lastAttemptAt: { type: Date, default: null }
   }
 }, { timestamps: true });
 

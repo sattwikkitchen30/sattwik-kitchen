@@ -11,7 +11,10 @@
   <main class="orders-shell">
     <header class="orders-header">
       <a class="customer-brand" href="/"><img src="https://res.cloudinary.com/spfurewl/image/upload/v1789330411/sattwik-logo.png" alt="Sattwik Kitchen" /></a>
-      <div class="orders-actions"><a class="btn btn-secondary" href="/">Back to menu</a><button class="btn btn-secondary" id="logoutButton">Log out</button></div>
+      <div class="orders-actions">
+        <a class="btn btn-secondary" href="/">Back to menu</a>
+        <button class="btn btn-secondary" id="logoutButton">Log out</button>
+      </div>
     </header>
     <div class="orders-intro"><p class="eyebrow">CUSTOMER ACCOUNT</p><h1>My Orders</h1><p class="muted">Track each order as it moves from the kitchen to your door. Updates appear automatically.</p></div>
     <div id="ordersMessage" class="form-message" aria-live="polite"></div>
@@ -28,6 +31,63 @@
     </nav>
     <section id="ordersList" class="orders-list"></section>
   </main>
+
+  <!-- Edit Customer Profile Modal -->
+  <div id="customerProfileModal" class="modal customer-profile-modal" role="dialog" aria-modal="true" aria-labelledby="customerProfileTitle" style="display:none;">
+    <div class="modal-content profile-modal-content">
+      <div class="modal-header">
+        <div>
+          <h2 id="customerProfileTitle">Edit Profile</h2>
+          <p class="modal-subtitle">Update your personal details and delivery address.</p>
+        </div>
+        <button type="button" class="close-modal" id="closeCustomerProfileModal" aria-label="Close dialog">&times;</button>
+      </div>
+      <form id="customerProfileForm" novalidate>
+        <fieldset class="profile-section">
+          <legend class="profile-section-heading">Personal Information</legend>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="editCustomerFirstName">First Name <span class="required" aria-hidden="true">*</span></label>
+              <input type="text" id="editCustomerFirstName" name="firstName" required autocomplete="given-name" placeholder="First name" />
+            </div>
+            <div class="form-group">
+              <label for="editCustomerLastName">Last Name <span class="required" aria-hidden="true">*</span></label>
+              <input type="text" id="editCustomerLastName" name="lastName" required autocomplete="family-name" placeholder="Last name" />
+            </div>
+            <div class="form-group">
+              <label for="editCustomerEmail">Email Address <span class="required" aria-hidden="true">*</span></label>
+              <input type="email" id="editCustomerEmail" name="email" required autocomplete="email" placeholder="name@example.com" />
+            </div>
+            <div class="form-group">
+              <label for="editCustomerPhone">Phone Number <span class="required" aria-hidden="true">*</span></label>
+              <input type="tel" id="editCustomerPhone" name="phone" required autocomplete="tel" placeholder="+1 604 555 0123" />
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset class="profile-section">
+          <legend class="profile-section-heading">Delivery Address Details</legend>
+          <div class="form-grid">
+            <div class="form-group full-width">
+              <label for="editCustomerArea">Delivery Area / Locality</label>
+              <input type="text" id="editCustomerArea" name="area" autocomplete="address-level2" placeholder="e.g. Surrey, Burnaby, Richmond" />
+            </div>
+            <div class="form-group full-width">
+              <label for="editCustomerAddress">Full Street Address</label>
+              <textarea id="editCustomerAddress" name="address" rows="3" autocomplete="street-address" placeholder="Street address, unit, buzzer code, etc."></textarea>
+            </div>
+          </div>
+        </fieldset>
+
+        <div class="profile-modal-actions">
+          <button type="submit" class="profile-btn primary" id="saveCustomerProfileBtn">Save Changes</button>
+          <button type="button" class="profile-btn secondary" id="cancelCustomerProfileBtn">Cancel</button>
+        </div>
+        <p id="customerProfileMessage" class="profile-message" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
   <script src="customer-orders.js"></script>
 </body>

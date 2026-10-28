@@ -121,4 +121,6 @@ router.post('/change-password', authRequired, async (req, res) => {
   }
 });
 
+router.use('/', require('./passwordReset'));
+
 module.exports = router;

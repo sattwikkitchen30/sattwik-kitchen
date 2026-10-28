@@ -286,18 +286,47 @@
     <div class="modal-shell member-details-modal">
       <div class="modal-header">
         <h3 id="memberDetailsTitle">Delivery Member Details</h3>
-        <button type="button" class="modal-close" id="memberDetailsCloseBtn" aria-label="Close">&times;</button>
+        <button type="button" class="modal-close member-details-close-btn" id="memberDetailsCloseBtn" aria-label="Close">&times;</button>
       </div>
       <div class="member-details-content">
         <div class="member-info-section">
-          <h4>Member Information</h4>
-          <div class="member-info-grid">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px;">
+            <h4 style="margin: 0;">Member Information</h4>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button id="memberEditBtn" class="btn btn-secondary" type="button" style="padding: 6px 14px; font-size: 13px;">Edit Details</button>
+              <button id="memberStatusToggleBtn" class="btn btn-danger" type="button" style="padding: 6px 14px; font-size: 13px;">Deactivate Member</button>
+            </div>
+          </div>
+          
+          <div id="memberInfoViewGrid" class="member-info-grid">
             <div><strong>Name:</strong> <span id="memberDetailName"></span></div>
             <div><strong>Email:</strong> <span id="memberDetailEmail"></span></div>
             <div><strong>Phone:</strong> <span id="memberDetailPhone"></span></div>
             <div><strong>Status:</strong> <span id="memberDetailStatus"></span></div>
             <div><strong>Total Deliveries:</strong> <span id="memberDetailTotalCount"></span></div>
           </div>
+
+          <form id="editDeliveryMemberForm" class="stacked-form" hidden style="margin-top: 10px;" novalidate>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px;">
+              <label>
+                <span>Full Name *</span>
+                <input type="text" id="editDeliveryMemberName" required />
+              </label>
+              <label>
+                <span>Email *</span>
+                <input type="email" id="editDeliveryMemberEmail" required />
+              </label>
+              <label>
+                <span>Phone *</span>
+                <input type="tel" id="editDeliveryMemberPhone" required />
+              </label>
+            </div>
+            <p id="editDeliveryMemberMessage" class="form-message" aria-live="polite"></p>
+            <div style="display: flex; gap: 10px; margin-top: 14px;">
+              <button type="submit" id="saveDeliveryMemberEditBtn" class="btn btn-primary" style="padding: 8px 18px; font-size: 13px;">Save Changes</button>
+              <button type="button" id="cancelDeliveryMemberEditBtn" class="btn btn-secondary" style="padding: 8px 18px; font-size: 13px;">Cancel</button>
+            </div>
+          </form>
         </div>
         
         <div class="member-filter-section">
@@ -347,8 +376,8 @@
         </div>
         
         <div class="member-actions-section">
-          <button id="memberDeleteBtn" class="btn btn-danger" type="button">Delete Member</button>
-          <button id="memberDetailsCloseBtn" class="btn btn-secondary" type="button">Close</button>
+          <button id="memberDeleteBtn" class="btn btn-danger" type="button">Deactivate Member</button>
+          <button id="memberDetailsCloseFooterBtn" class="btn btn-secondary member-details-close-btn" type="button">Close</button>
         </div>
       </div>
     </div>

@@ -66,13 +66,27 @@ const orderSchema = new mongoose.Schema({
   fulfillment: { type: String, enum: ['pickup', 'delivery', 'mixed'], default: 'pickup' },
   type: { type: String, enum: ['product', 'tiffin', 'catering', 'custom'], default: 'product' },
   tiffinPlan: {
-    packageType: { type: String, enum: ['full', 'curry-only'], default: null },
-    size: { type: String, enum: ['single', 'couple', 'family'], default: null },
-    price: { type: Number, default: null }
+    packageType: { type: String, default: null },
+    size: { type: String, default: null },
+    price: { type: Number, default: null },
+    displayName: { type: String, default: null }
   },
   customRequest: { type: String, default: '' },
   customerFeedback: { type: Map, of: String, default: undefined },
   comments: { type: [commentSchema], default: [] },
+  whatsappDeliveryNotifications: {
+    type: [{
+      deliveryDate: { type: Date },
+      dateKey: { type: String },
+      sent: { type: Boolean, default: false },
+      sentAt: { type: Date, default: null },
+      recipientPhone: { type: String, default: '' },
+      messageId: { type: String, default: null },
+      status: { type: String, default: 'pending' },
+      error: { type: String, default: null }
+    }],
+    default: []
+  },
   totalAmount: { type: Number, required: true, min: 0 },
   payments: { type: [paymentSchema], default: [] },
   deliveryAddress: { type: String, default: '' },

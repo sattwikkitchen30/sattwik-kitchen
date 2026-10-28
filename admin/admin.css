@@ -2408,3 +2408,25 @@ th {
     font-size: 11px;
   }
 }
+
+.btn-success {
+  background: var(--green);
+  color: #fff;
+  border: 1px solid var(--green);
+}
+
+.btn-success:hover {
+  background: var(--green-dark);
+  border-color: var(--green-dark);
+}
+
+.badge.active {
+  background: #dff5ea;
+  color: #11613d;
+}
+
+.badge.inactive {
+  background: #fbe8e8;
+  color: #8e322d;
+}
+

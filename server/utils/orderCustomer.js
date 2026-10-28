@@ -3,10 +3,15 @@ function getOrderCustomer(order) {
     ? order.customer
     : {};
   const snapshot = order?.customerSnapshot || {};
-  const value = (key) => Object.prototype.hasOwnProperty.call(snapshot, key)
-    ? snapshot[key] ?? ''
-    : customer[key] || '';
+  const value = (key) => {
+    const custVal = customer[key];
+    if (custVal !== undefined && custVal !== null && String(custVal).trim() !== '') {
+      return String(custVal).trim();
+    }
+    return snapshot[key] ?? '';
+  };
   return {
+    ...snapshot,
     ...customer,
     firstName: value('firstName'),
     lastName: value('lastName'),

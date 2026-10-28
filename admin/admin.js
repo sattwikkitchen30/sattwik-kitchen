@@ -729,14 +729,6 @@ function renderCustomerInsights(customers) {
 function formatCompactItemName(name) {
   if (!name || typeof name !== 'string') return '';
   const trimmed = name.trim();
-  const planMatch = trimmed.match(
-    /^(?:Tiffin\s*Plan\s*[-—–:]\s*)?(Full\s*Meal|Curry(?:-|\s*)Only)(?:\s+Package)?(?:\s*\(|\s*[-—–:]\s*)(Single|Couple|Family)\)?$/i
-  );
-  if (planMatch) {
-    const planType = /^curry/i.test(planMatch[1]) ? 'Curry-Only' : 'Full Meal';
-    const size = planMatch[2].charAt(0).toUpperCase() + planMatch[2].slice(1).toLowerCase();
-    return `${planType} — ${size}`;
-  }
   const prefixMatch = trimmed.match(/^Tiffin\s*Plan\s*[-—–:]\s*(.+)$/i);
   if (prefixMatch) {
     return prefixMatch[1].trim();
@@ -786,6 +778,26 @@ function isDeliveryTiffinOrder(order) {
   }
 
   return false;
+}
+
+function renderDeliveryMemberSelectOptions(assignedMemberId, deliveryMembers) {
+  const assignedStr = String(assignedMemberId || '');
+  const assignedMember = assignedStr ? (deliveryMembers || []).find((m) => String(m.id) === assignedStr) : null;
+  const isAssignedInactive = assignedMember && assignedMember.active === false;
+
+  let options = '<option value="">Unassigned</option>';
+
+  if (isAssignedInactive) {
+    options += `<option value="${assignedMember.id}" selected disabled>${escHtml(assignedMember.name)} (Inactive)</option>`;
+  }
+
+  const activeMembers = (deliveryMembers || []).filter((m) => m.active !== false);
+  options += activeMembers.map((m) => {
+    const isSelected = !isAssignedInactive && assignedStr === String(m.id);
+    return `<option value="${m.id}" ${isSelected ? 'selected' : ''}>${escHtml(m.name)}</option>`;
+  }).join('');
+
+  return options;
 }
 
 async function renderOrdersTable() {
@@ -838,7 +850,7 @@ async function renderOrdersTable() {
         ${orders.map((order) => {
           const items = order.items || [];
           const pickupStatus = pickupStatusForOrder(order, items);
-          const customer = order.customerDoc || {};
+          const customer = (order.customer && typeof order.customer === 'object' ? order.customer : order.customerDoc) || {};
           const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
           const canCancel = !order.firstDeliveredAt && !order.deliveredAt;
           const isTiffinDelivery = isDeliveryTiffinOrder(order);
@@ -878,7 +890,7 @@ async function renderOrdersTable() {
               <tr class="${rowState}" data-order-id="${order._id}">
                 <td>${escHtml(order.orderId)}</td>
                 <td><strong>${escHtml(customerName)}</strong></td>
-                <td>${escHtml(customer.phone || '—')}<br>${escHtml(customer.email || '—')}<br><strong>Address:</strong> ${escHtml(order.deliveryAddress || customer.address || customer.area || '—')}</td>
+                <td>${escHtml(customer.phone || '—')}<br>${escHtml(customer.email || '—')}<br><strong>Address:</strong> ${escHtml(customer.address || customer.area || order.deliveryAddress || '—')}</td>
                 <td class="order-item-cell">${itemDetails}<br><button type="button" class="edit-tiffin-items-btn" data-order-id="${order._id}">Add Items</button></td>
                 <td>${displayType}</td>
                 <td>Delivery</td>
@@ -898,8 +910,7 @@ async function renderOrdersTable() {
                 </td>
                 <td>
                   <select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
-                    <option value="">Unassigned</option>
-                    ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${member.name}</option>`).join('')}
+                    ${renderDeliveryMemberSelectOptions(order.deliveryMemberId, deliveryMembers)}
                   </select>
                 </td>
                 <td>${amountEditor}</td>
@@ -922,7 +933,7 @@ async function renderOrdersTable() {
           });
           const itemDetails = itemEntries.join('<br>');
           const orderDetails = [itemDetails, order.customRequest ? `Custom request: ${order.customRequest}` : ''].filter(Boolean).join('<br>') || '—';
-          const savedLocation = order.deliveryAddress || customer.address || customer.area || '—';
+          const savedLocation = customer.address || customer.area || order.deliveryAddress || '—';
           const deliveryAddress = state.ordersFulfillment === 'delivery'
             ? `<br><strong>Address:</strong> ${escHtml(savedLocation)}`
             : `<br><strong>Location:</strong> ${escHtml(savedLocation)}`;
@@ -932,8 +943,7 @@ async function renderOrdersTable() {
           const orderDateTime = new Date(order.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Vancouver' });
           const deliveryAssignment = state.ordersFulfillment === 'delivery' ? `
             <td><select class="delivery-member-select" data-order-id="${order._id}" data-current-member="${order.deliveryMemberId || ''}">
-              <option value="">Unassigned</option>
-              ${deliveryMembers.filter((member) => member.active !== false).map((member) => `<option value="${member.id}" ${String(order.deliveryMemberId || '') === String(member.id) ? 'selected' : ''}>${escHtml(member.name)}</option>`).join('')}
+              ${renderDeliveryMemberSelectOptions(order.deliveryMemberId, deliveryMembers)}
             </select></td>` : '';
           const pickupDateVal = order.pickupDate ? getDateInputValue(order.pickupDate) : '';
           const deliveryStartDateVal = order.subscriptionStartDate ? getDateInputValue(order.subscriptionStartDate) : '';
@@ -1801,7 +1811,7 @@ async function openTiffinItemsEditor(orderId) {
   });
   tiffinEditorAdditionalRows = [createEmptyAddItemRow()];
 
-  const customer = order.customer || {};
+  const customer = (order.customer && typeof order.customer === 'object' ? order.customer : order.customerDoc) || {};
   const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ') || '—';
   const planItems = (order.items || []).filter((item) => (item.fulfillment || order.fulfillment) === 'delivery' && (
     item.category === 'Tiffin Plans' ||
@@ -2555,25 +2565,23 @@ function populateManualPlanSelect() {
   const select = document.getElementById('manualPlanSelect');
   if (!select) return;
   
+  const categoryOrder = { 'Full Meal': 0, 'Curry-Only': 1, 'full': 0, 'curry-only': 1 };
   const options = manualOrderDeliveryPlans
-    .filter(plan => plan.packageType && plan.active !== false)
-    .map(plan => ({
+    .filter(plan => plan.active !== false)
+    .map((plan, index) => ({
       _id: plan._id,
       displayName: plan.displayName,
       packageType: plan.packageType,
+      category: plan.category,
       size: plan.size,
-      price: plan.price
+      price: plan.price,
+      index
     }))
     .sort((a, b) => {
-      const typeOrder = { 'full': 0, 'curry-only': 1 };
-      const aType = typeOrder[a.packageType] ?? 99;
-      const bType = typeOrder[b.packageType] ?? 99;
-      if (aType !== bType) return aType - bType;
-      const sizeOrder = { 'single': 0, 'couple': 1, 'family': 2 };
-      const aSize = sizeOrder[a.size] ?? 99;
-      const bSize = sizeOrder[b.size] ?? 99;
-      if (aSize !== bSize) return aSize - bSize;
-      return a.displayName.localeCompare(b.displayName);
+      const catA = categoryOrder[a.category] ?? categoryOrder[a.packageType] ?? 99;
+      const catB = categoryOrder[b.category] ?? categoryOrder[b.packageType] ?? 99;
+      if (catA !== catB) return catA - catB;
+      return a.index - b.index;
     });
   
   if (options.length === 0) {
@@ -3029,6 +3037,7 @@ manualOrderForm?.addEventListener('submit', async (event) => {
         planId: plan._id,
         packageType: plan.packageType,
         size: plan.size,
+        displayName: plan.displayName,
         quantity: Number(plan.quantity),
         price: Number(plan.price)
       }));
@@ -3212,7 +3221,7 @@ async function renderDeliveryMembersTable() {
             <td>${escHtml(member.name)}</td>
             <td>${escHtml(member.email)}</td>
             <td>${escHtml(member.phone)}</td>
-            <td>${member.active ? 'Yes' : 'No'}</td>
+            <td><span class="badge ${member.active ? 'active' : 'inactive'}">${member.active ? 'Active' : 'Inactive'}</span></td>
             <td>${dateLabel(member.createdAt)}</td>
             <td>
               <button class="table-action-btn view-details-btn" data-member-id="${member.id}">View Details</button>
@@ -3272,6 +3281,7 @@ document.getElementById('addDeliveryMemberForm')?.addEventListener('submit', asy
 // -----------------------------------------------------------------------
 
 let currentMemberId = null;
+let currentMember = null;
 let memberHistoryPage = 0;
 const memberHistoryPageSize = 50;
 
@@ -3281,14 +3291,30 @@ async function openMemberDetailsModal(memberId) {
   
   try {
     const data = await api(`/delivery-members/${encodeURIComponent(memberId)}`);
-    const member = data.member;
+    currentMember = data.member;
+    const member = currentMember;
     
     // Populate member info
     document.getElementById('memberDetailName').textContent = member.name;
     document.getElementById('memberDetailEmail').textContent = member.email;
     document.getElementById('memberDetailPhone').textContent = member.phone;
-    document.getElementById('memberDetailStatus').textContent = member.active ? 'Active' : 'Inactive';
     document.getElementById('memberDetailTotalCount').textContent = data.totalCount || 0;
+    updateDeliveryMemberStatusUI(member.active);
+
+    // Reset edit form mode to view mode
+    const editForm = document.getElementById('editDeliveryMemberForm');
+    const infoGrid = document.getElementById('memberInfoViewGrid');
+    const editBtn = document.getElementById('memberEditBtn');
+    const statusBtn = document.getElementById('memberStatusToggleBtn');
+    if (editForm) editForm.hidden = true;
+    if (infoGrid) infoGrid.hidden = false;
+    if (editBtn) editBtn.hidden = false;
+    if (statusBtn) statusBtn.hidden = false;
+    const editMsg = document.getElementById('editDeliveryMemberMessage');
+    if (editMsg) {
+      editMsg.textContent = '';
+      editMsg.className = 'form-message';
+    }
     
     // Set current month as default for month filter
     const now = new Date();
@@ -3309,8 +3335,23 @@ function closeMemberDetailsModal() {
   document.getElementById('memberDetailsModal').hidden = true;
   document.getElementById('memberDetailsModal').setAttribute('aria-hidden', 'true');
   currentMemberId = null;
+  currentMember = null;
+  const editForm = document.getElementById('editDeliveryMemberForm');
+  const infoGrid = document.getElementById('memberInfoViewGrid');
+  const editBtn = document.getElementById('memberEditBtn');
+  const statusBtn = document.getElementById('memberStatusToggleBtn');
+  if (editForm) editForm.hidden = true;
+  if (infoGrid) infoGrid.hidden = false;
+  if (editBtn) editBtn.hidden = false;
+  if (statusBtn) statusBtn.hidden = false;
+  const editMsg = document.getElementById('editDeliveryMemberMessage');
+  if (editMsg) {
+    editMsg.textContent = '';
+    editMsg.className = 'form-message';
+  }
   memberHistoryPage = 0;
-  document.getElementById('memberFilterMessage').textContent = '';
+  const filterMsg = document.getElementById('memberFilterMessage');
+  if (filterMsg) filterMsg.textContent = '';
 }
 
 async function loadMemberHistory(memberId, filters = {}) {
@@ -3463,16 +3504,151 @@ document.getElementById('memberHistoryNext')?.addEventListener('click', () => {
   loadMemberHistory(currentMemberId);
 });
 
-// Delete member
-document.getElementById('memberDeleteBtn')?.addEventListener('click', () => {
-  const memberName = document.getElementById('memberDetailName').textContent;
+// Helper to keep status badge and toggle buttons in sync
+function updateDeliveryMemberStatusUI(isActive) {
+  const statusEl = document.getElementById('memberDetailStatus');
+  if (statusEl) {
+    statusEl.innerHTML = `<span class="badge ${isActive ? 'active' : 'inactive'}">${isActive ? 'Active' : 'Inactive'}</span>`;
+  }
+  const buttons = [
+    document.getElementById('memberStatusToggleBtn'),
+    document.getElementById('memberDeleteBtn')
+  ];
+  buttons.forEach((btn) => {
+    if (!btn) return;
+    if (isActive) {
+      btn.textContent = 'Deactivate Member';
+      btn.className = 'btn btn-danger';
+    } else {
+      btn.textContent = 'Activate Member';
+      btn.className = 'btn btn-success';
+    }
+  });
+}
+
+// Edit member details toggle and form submission (profile info only: name, email, phone)
+document.getElementById('memberEditBtn')?.addEventListener('click', () => {
+  if (!currentMember) return;
+  document.getElementById('editDeliveryMemberName').value = currentMember.name || '';
+  document.getElementById('editDeliveryMemberEmail').value = currentMember.email || '';
+  document.getElementById('editDeliveryMemberPhone').value = currentMember.phone || '';
+  const msgEl = document.getElementById('editDeliveryMemberMessage');
+  if (msgEl) {
+    msgEl.textContent = '';
+    msgEl.className = 'form-message';
+  }
+  document.getElementById('memberInfoViewGrid').hidden = true;
+  document.getElementById('memberEditBtn').hidden = true;
+  const statusToggleBtn = document.getElementById('memberStatusToggleBtn');
+  if (statusToggleBtn) statusToggleBtn.hidden = true;
+  document.getElementById('editDeliveryMemberForm').hidden = false;
+});
+
+document.getElementById('cancelDeliveryMemberEditBtn')?.addEventListener('click', () => {
+  document.getElementById('editDeliveryMemberForm').hidden = true;
+  document.getElementById('memberInfoViewGrid').hidden = false;
+  document.getElementById('memberEditBtn').hidden = false;
+  const statusToggleBtn = document.getElementById('memberStatusToggleBtn');
+  if (statusToggleBtn) statusToggleBtn.hidden = false;
+  const msgEl = document.getElementById('editDeliveryMemberMessage');
+  if (msgEl) {
+    msgEl.textContent = '';
+    msgEl.className = 'form-message';
+  }
+});
+
+document.getElementById('editDeliveryMemberForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!currentMemberId) return;
+
+  const msgEl = document.getElementById('editDeliveryMemberMessage');
+  msgEl.textContent = '';
+  msgEl.className = 'form-message';
+
+  const name = document.getElementById('editDeliveryMemberName').value.trim();
+  const email = document.getElementById('editDeliveryMemberEmail').value.trim().toLowerCase();
+  const phone = document.getElementById('editDeliveryMemberPhone').value.trim();
+
+  if (!name) {
+    msgEl.textContent = 'Name is required.';
+    msgEl.className = 'form-message error';
+    return;
+  }
+  if (!email || !email.includes('@')) {
+    msgEl.textContent = 'Enter a valid email address.';
+    msgEl.className = 'form-message error';
+    return;
+  }
+  if (!phone) {
+    msgEl.textContent = 'Phone number is required.';
+    msgEl.className = 'form-message error';
+    return;
+  }
+
+  const submitBtn = document.getElementById('saveDeliveryMemberEditBtn');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Saving…';
+
+  try {
+    const res = await api(`/delivery-members/${encodeURIComponent(currentMemberId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name, email, phone })
+    });
+    currentMember = res.member;
+
+    document.getElementById('memberDetailName').textContent = currentMember.name;
+    document.getElementById('memberDetailEmail').textContent = currentMember.email;
+    document.getElementById('memberDetailPhone').textContent = currentMember.phone;
+    updateDeliveryMemberStatusUI(currentMember.active);
+
+    document.getElementById('editDeliveryMemberForm').hidden = true;
+    document.getElementById('memberInfoViewGrid').hidden = false;
+    document.getElementById('memberEditBtn').hidden = false;
+    const statusToggleBtn = document.getElementById('memberStatusToggleBtn');
+    if (statusToggleBtn) statusToggleBtn.hidden = false;
+
+    await renderDeliveryMembersTable();
+    await loadDashboardData();
+    showAdminToast('Delivery member details updated successfully');
+  } catch (error) {
+    msgEl.textContent = error.message || 'Could not update delivery member details';
+    msgEl.className = 'form-message error';
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Save Changes';
+  }
+});
+
+// Deactivate / Activate member (Soft Delete) - confirmation dialog without profile fields
+function openMemberStatusConfirmModal() {
+  if (!currentMember) return;
+  const isCurrentlyActive = currentMember.active;
+  const titleEl = document.getElementById('deleteMemberTitle');
   const message = document.getElementById('deleteMemberMessage');
+  const confirmBtn = document.getElementById('confirmDeleteMemberBtn');
   
-  message.textContent = `Are you sure you want to delete ${memberName}? This action is permanent and will remove their account and all related delivery history. Their past deliveries will no longer appear in reports.`;
+  if (isCurrentlyActive) {
+    if (titleEl) titleEl.textContent = 'Deactivate Delivery Member';
+    message.textContent = `Are you sure you want to deactivate ${currentMember.name}? They will be marked as Inactive and excluded from new delivery assignments. All historical orders and assignments will be preserved.`;
+    if (confirmBtn) {
+      confirmBtn.textContent = 'Deactivate Member';
+      confirmBtn.className = 'btn btn-danger';
+    }
+  } else {
+    if (titleEl) titleEl.textContent = 'Activate Delivery Member';
+    message.textContent = `Activate ${currentMember.name}? They will be marked as Active and become eligible for new delivery assignments.`;
+    if (confirmBtn) {
+      confirmBtn.textContent = 'Activate Member';
+      confirmBtn.className = 'btn btn-success';
+    }
+  }
   
   document.getElementById('deleteMemberModal').hidden = false;
   document.getElementById('deleteMemberModal').setAttribute('aria-hidden', 'false');
-});
+}
+
+document.getElementById('memberStatusToggleBtn')?.addEventListener('click', openMemberStatusConfirmModal);
+document.getElementById('memberDeleteBtn')?.addEventListener('click', openMemberStatusConfirmModal);
 
 document.getElementById('cancelDeleteMemberBtn')?.addEventListener('click', () => {
   document.getElementById('deleteMemberModal').hidden = true;
@@ -3485,23 +3661,37 @@ document.getElementById('deleteMemberCloseBtn')?.addEventListener('click', () =>
 });
 
 document.getElementById('confirmDeleteMemberBtn')?.addEventListener('click', async () => {
-  if (!currentMemberId) return;
+  if (!currentMemberId || !currentMember) return;
+  const newActiveState = !currentMember.active;
+  const confirmBtn = document.getElementById('confirmDeleteMemberBtn');
+  confirmBtn.disabled = true;
   
   try {
-    await api(`/delivery-members/${encodeURIComponent(currentMemberId)}`, { method: 'DELETE' });
-    alert('Delivery member deleted successfully');
-    closeMemberDetailsModal();
+    const res = await api(`/delivery-members/${encodeURIComponent(currentMemberId)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ active: newActiveState })
+    });
+    currentMember = res.member;
+
+    updateDeliveryMemberStatusUI(currentMember.active);
+
     document.getElementById('deleteMemberModal').hidden = true;
     document.getElementById('deleteMemberModal').setAttribute('aria-hidden', 'true');
+    showAdminToast(`Delivery member ${newActiveState ? 'activated' : 'deactivated'} successfully`);
+
     await renderDeliveryMembersTable();
+    await loadDashboardData();
   } catch (error) {
-    alert(error.message || 'Could not delete delivery member');
+    alert(error.message || 'Could not update delivery member status');
+  } finally {
+    confirmBtn.disabled = false;
   }
 });
 
-// Close modals
+// Close modals reliably from top close icon or bottom close button
 document.getElementById('memberDetailsCloseBtn')?.addEventListener('click', closeMemberDetailsModal);
-document.getElementById('memberDetailsCloseBtn')?.addEventListener('click', closeMemberDetailsModal);
+document.getElementById('memberDetailsCloseFooterBtn')?.addEventListener('click', closeMemberDetailsModal);
+document.querySelectorAll('.member-details-close-btn').forEach((btn) => btn.addEventListener('click', closeMemberDetailsModal));
 document.getElementById('memberDetailsModal')?.addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeMemberDetailsModal();
 });

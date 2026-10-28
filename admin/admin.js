@@ -1,6 +1,322 @@
 const API_PREFIX = '/api';
 let token = localStorage.getItem('sattwikToken') || '';
-let state = { overview: null, orders: [], products: [], customers: [], custom: null, ordersFulfillment: 'delivery', ordersRequestId: 0 };
+let state = { overview: null, orders: [], products: [], customers: [], custom: null, ordersFulfillment: 'delivery', ordersRequestId: 0, deliveryStatusFilter: '', pickupStatusFilter: '', promotions: [] };
+
+const DELIVERY_STATUS_FILTERS = [
+  { value: '', label: 'All Statuses' },
+  { value: 'PENDING', label: 'Pending' },
+  { value: 'ACCEPTED', label: 'Accepted' },
+  { value: 'OUT_FOR_DELIVERY', label: 'Out for Delivery' },
+  { value: 'DELIVERED', label: 'Delivered' },
+  { value: 'CANCELLED', label: 'Cancelled' },
+  { value: 'EXPIRED', label: 'Expired' }
+];
+
+const PICKUP_STATUS_FILTERS = [
+  { value: '', label: 'All Statuses' },
+  { value: 'PENDING', label: 'Pending' },
+  { value: 'ACCEPTED', label: 'Accepted' },
+  { value: 'DELIVERED', label: 'Delivered' },
+  { value: 'CANCELLED', label: 'Cancelled' }
+];
+
+function renderOrdersStatusDropdown() {
+  const isPickup = state.ordersFulfillment === 'pickup';
+  const deliveryLabel = document.getElementById('deliveryStatusFilterLabel');
+  const pickupLabel = document.getElementById('pickupStatusFilterLabel');
+  const deliverySelect = document.getElementById('deliveryStatusFilter');
+  const pickupSelect = document.getElementById('pickupStatusFilter');
+
+  if (deliveryLabel) deliveryLabel.hidden = isPickup;
+  if (pickupLabel) pickupLabel.hidden = !isPickup;
+
+  if (deliverySelect) {
+    if (deliverySelect.options.length === 0) {
+      deliverySelect.innerHTML = DELIVERY_STATUS_FILTERS.map(
+        (opt) => `<option value="${opt.value}">${opt.label}</option>`
+      ).join('');
+    }
+    deliverySelect.value = state.deliveryStatusFilter || '';
+  }
+
+  if (pickupSelect) {
+    if (pickupSelect.options.length === 0) {
+      pickupSelect.innerHTML = PICKUP_STATUS_FILTERS.map(
+        (opt) => `<option value="${opt.value}">${opt.label}</option>`
+      ).join('');
+    }
+    pickupSelect.value = state.pickupStatusFilter || '';
+  }
+}
+const renderOrdersStatusFilters = renderOrdersStatusDropdown;
+// ==========================================
+// PROMOTIONS MANAGEMENT
+// ==========================================
+let promotionPendingDeleteId = null;
+
+async function loadPromotions() {
+  try {
+    const data = await api('/promotions/all');
+    state.promotions = Array.isArray(data.promotions) ? data.promotions : [];
+    renderPromotionsTable();
+  } catch (error) {
+    console.error('Failed to load promotions:', error);
+    const container = document.getElementById('promotionsTable');
+    if (container) {
+      container.innerHTML = `<div class="empty-cell" style="padding: 20px; color: var(--rose);">Could not load promotions: ${escHtml(error.message || 'Server error')}</div>`;
+    }
+  }
+}
+
+function renderPromotionsTable() {
+  const container = document.getElementById('promotionsTable');
+  const countBadge = document.getElementById('promotionsCountBadge');
+  if (!container) return;
+
+  const promotions = state.promotions || [];
+  if (countBadge) {
+    countBadge.textContent = `${promotions.length} ${promotions.length === 1 ? 'promotion' : 'promotions'}`;
+  }
+
+  if (promotions.length === 0) {
+    container.innerHTML = `<div class="empty-cell" style="padding: 32px 20px; text-align: center; color: var(--muted); font-size: 14px;">No promotions created yet. Use the form above to add your first active promotion.</div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th style="min-width: 180px;">Title</th>
+          <th style="min-width: 280px;">Description</th>
+          <th style="width: 120px;">Status</th>
+          <th style="width: 140px;">Created</th>
+          <th style="min-width: 220px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${promotions.map((p) => {
+          const isActive = p.isActive !== false;
+          const statusLabel = isActive ? 'Active' : 'Inactive';
+          const statusClass = isActive ? 'active' : 'inactive';
+          const toggleBtnText = isActive ? 'Deactivate' : 'Activate';
+          const toggleBtnClass = isActive ? 'btn-secondary' : 'btn-primary';
+          const createdStr = p.createdAt ? new Date(p.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+          return `
+            <tr data-promotion-id="${p._id}">
+              <td><strong style="color: var(--brown); font-size: 14px;">${escHtml(p.title)}</strong></td>
+              <td class="promotion-desc-cell">${escHtml(p.description)}</td>
+              <td><span class="badge ${statusClass}">${isActive ? '● Active' : '○ Inactive'}</span></td>
+              <td><small class="muted">${createdStr}</small></td>
+              <td>
+                <div class="promotions-actions-cell">
+                  <button type="button" class="btn btn-secondary edit-promotion-btn" data-id="${p._id}">Edit</button>
+                  <button type="button" class="btn ${toggleBtnClass} toggle-promotion-btn" data-id="${p._id}" data-current-status="${isActive}">${toggleBtnText}</button>
+                  <button type="button" class="btn btn-danger delete-promotion-btn" data-id="${p._id}" data-title="${escHtml(p.title)}">Delete</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  container.querySelectorAll('.edit-promotion-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id;
+      const promo = state.promotions.find((p) => String(p._id) === String(id));
+      if (promo) openPromotionEditModal(promo);
+    });
+  });
+
+  container.querySelectorAll('.toggle-promotion-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const currentStatus = btn.dataset.currentStatus === 'true';
+      await handleTogglePromotionStatus(id, !currentStatus, btn);
+    });
+  });
+
+  container.querySelectorAll('.delete-promotion-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id;
+      const promoTitle = btn.dataset.title || 'this promotion';
+      openDeletePromotionModal(id, promoTitle);
+    });
+  });
+}
+
+function openPromotionEditModal(promo) {
+  const modal = document.getElementById('promotionEditModal');
+  if (!modal) return;
+  document.getElementById('editPromotionId').value = promo._id;
+  document.getElementById('editPromotionTitle').value = promo.title || '';
+  document.getElementById('editPromotionDescription').value = promo.description || '';
+  
+  const titleErr = document.getElementById('editPromotionTitleError');
+  const descErr = document.getElementById('editPromotionDescriptionError');
+  const msg = document.getElementById('editPromotionMessage');
+  if (titleErr) { titleErr.hidden = true; titleErr.textContent = ''; }
+  if (descErr) { descErr.hidden = true; descErr.textContent = ''; }
+  if (msg) { msg.textContent = ''; msg.className = 'form-message'; }
+  
+  modal.hidden = false;
+  document.getElementById('editPromotionTitle')?.focus();
+}
+
+function closePromotionEditModal() {
+  const modal = document.getElementById('promotionEditModal');
+  if (modal) modal.hidden = true;
+}
+
+function openDeletePromotionModal(id, title) {
+  promotionPendingDeleteId = id;
+  const modal = document.getElementById('deletePromotionModal');
+  const msg = document.getElementById('deletePromotionMessageText');
+  if (msg) msg.textContent = `Are you sure you want to permanently delete "${title}"?`;
+  if (modal) modal.hidden = false;
+}
+
+function closeDeletePromotionModal() {
+  promotionPendingDeleteId = null;
+  const modal = document.getElementById('deletePromotionModal');
+  if (modal) modal.hidden = true;
+}
+
+async function handleCreatePromotion(event) {
+  event.preventDefault();
+  const titleInput = document.getElementById('promotionTitle');
+  const descInput = document.getElementById('promotionDescription');
+  const titleErr = document.getElementById('promotionTitleError');
+  const descErr = document.getElementById('promotionDescriptionError');
+  const messageEl = document.getElementById('createPromotionMessage');
+  const saveBtn = document.getElementById('savePromotionBtn');
+
+  if (titleErr) { titleErr.hidden = true; titleErr.textContent = ''; }
+  if (descErr) { descErr.hidden = true; descErr.textContent = ''; }
+  setMessage(messageEl, '');
+
+  const title = (titleInput?.value || '').trim();
+  const description = (descInput?.value || '').trim();
+
+  let hasError = false;
+  if (!title) {
+    if (titleErr) { titleErr.textContent = 'Promotion title is required.'; titleErr.hidden = false; }
+    hasError = true;
+  }
+  if (!description) {
+    if (descErr) { descErr.textContent = 'Promotion description is required.'; descErr.hidden = false; }
+    hasError = true;
+  }
+
+  if (hasError) return;
+
+  try {
+    if (saveBtn) saveBtn.disabled = true;
+    setMessage(messageEl, 'Creating promotion...');
+    await api('/promotions', {
+      method: 'POST',
+      body: JSON.stringify({ title, description })
+    });
+    setMessage(messageEl, 'Promotion created successfully! It is now active on the customer menu.', true);
+    showAdminToast('Promotion created successfully');
+    if (titleInput) titleInput.value = '';
+    if (descInput) descInput.value = '';
+    await loadPromotions();
+    setTimeout(() => { setMessage(messageEl, ''); }, 4000);
+  } catch (error) {
+    console.error('Failed to create promotion:', error);
+    setMessage(messageEl, error.message || 'Could not create promotion.');
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+async function handleSavePromotionEdit(event) {
+  event.preventDefault();
+  const id = document.getElementById('editPromotionId')?.value;
+  const titleInput = document.getElementById('editPromotionTitle');
+  const descInput = document.getElementById('editPromotionDescription');
+  const titleErr = document.getElementById('editPromotionTitleError');
+  const descErr = document.getElementById('editPromotionDescriptionError');
+  const messageEl = document.getElementById('editPromotionMessage');
+  const saveBtn = document.getElementById('savePromotionEditBtn');
+
+  if (titleErr) { titleErr.hidden = true; titleErr.textContent = ''; }
+  if (descErr) { descErr.hidden = true; descErr.textContent = ''; }
+  setMessage(messageEl, '');
+
+  const title = (titleInput?.value || '').trim();
+  const description = (descInput?.value || '').trim();
+
+  let hasError = false;
+  if (!title) {
+    if (titleErr) { titleErr.textContent = 'Promotion title is required.'; titleErr.hidden = false; }
+    hasError = true;
+  }
+  if (!description) {
+    if (descErr) { descErr.textContent = 'Promotion description is required.'; descErr.hidden = false; }
+    hasError = true;
+  }
+
+  if (hasError || !id) return;
+
+  try {
+    if (saveBtn) saveBtn.disabled = true;
+    setMessage(messageEl, 'Saving changes...');
+    await api(`/promotions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ title, description })
+    });
+    showAdminToast('Promotion updated successfully');
+    closePromotionEditModal();
+    await loadPromotions();
+  } catch (error) {
+    console.error('Failed to update promotion:', error);
+    setMessage(messageEl, error.message || 'Could not update promotion.');
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+async function handleTogglePromotionStatus(id, newStatus, btn) {
+  if (!id) return;
+  try {
+    if (btn) btn.disabled = true;
+    await api(`/promotions/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive: newStatus })
+    });
+    showAdminToast(`Promotion ${newStatus ? 'activated' : 'deactivated'} successfully`);
+    await loadPromotions();
+  } catch (error) {
+    console.error('Failed to toggle promotion status:', error);
+    alert(error.message || 'Could not update promotion status');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleConfirmDeletePromotion() {
+  if (!promotionPendingDeleteId) return;
+  const btn = document.getElementById('confirmDeletePromotionBtn');
+  try {
+    if (btn) btn.disabled = true;
+    await api(`/promotions/${promotionPendingDeleteId}`, {
+      method: 'DELETE'
+    });
+    showAdminToast('Promotion deleted successfully');
+    closeDeletePromotionModal();
+    await loadPromotions();
+  } catch (error) {
+    console.error('Failed to delete promotion:', error);
+    alert(error.message || 'Could not delete promotion');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 let tiffinEditorOrder = null;
 let tiffinEditorItems = [];
 let tiffinEditorProducts = [];
@@ -82,6 +398,7 @@ async function loadProfile() {
     if (window.location.pathname.endsWith('/dashboard.html')) {
       loadDashboardData();
       loadAdmins();
+      loadPromotions();
     }
     redirectToDashboard();
   } catch (error) {
@@ -119,6 +436,9 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
     button.addEventListener('click', () => {
       navButtons.forEach((btn) => btn.classList.toggle('active', btn === button));
       views.forEach((view) => view.classList.toggle('active', view.id === `${button.dataset.view}View`));
+      if (button.dataset.view === 'promotions') {
+        loadPromotions();
+      }
     });
   });
 
@@ -134,6 +454,21 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
   });
 
   document.getElementById('refreshBtn')?.addEventListener('click', loadDashboardData);
+
+  // Promotions form and modal listeners
+  document.getElementById('createPromotionForm')?.addEventListener('submit', handleCreatePromotion);
+  document.getElementById('promotionEditForm')?.addEventListener('submit', handleSavePromotionEdit);
+  document.getElementById('promotionEditCloseBtn')?.addEventListener('click', closePromotionEditModal);
+  document.getElementById('cancelPromotionEditBtn')?.addEventListener('click', closePromotionEditModal);
+  document.getElementById('deletePromotionCloseBtn')?.addEventListener('click', closeDeletePromotionModal);
+  document.getElementById('cancelDeletePromotionBtn')?.addEventListener('click', closeDeletePromotionModal);
+  document.getElementById('confirmDeletePromotionBtn')?.addEventListener('click', handleConfirmDeletePromotion);
+  document.getElementById('promotionEditModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'promotionEditModal') closePromotionEditModal();
+  });
+  document.getElementById('deletePromotionModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'deletePromotionModal') closeDeletePromotionModal();
+  });
   document.querySelectorAll('[data-export]').forEach((button) => {
     button.addEventListener('click', () => exportData(button.dataset.export));
   });
@@ -144,11 +479,22 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
   document.getElementById('toDate')?.addEventListener('change', loadDashboardData);
   document.getElementById('ordersCreatedDate')?.addEventListener('change', renderOrdersTable);
   document.getElementById('ordersSearch')?.addEventListener('input', scheduleOrdersSearch);
+  document.getElementById('deliveryStatusFilter')?.addEventListener('change', async (event) => {
+    state.deliveryStatusFilter = event.target.value || '';
+    await renderOrdersTable();
+  });
+  document.getElementById('pickupStatusFilter')?.addEventListener('change', async (event) => {
+    state.pickupStatusFilter = event.target.value || '';
+    await renderOrdersTable();
+  });
   document.getElementById('ordersFilterReset')?.addEventListener('click', () => {
     const date = document.getElementById('ordersCreatedDate');
     const search = document.getElementById('ordersSearch');
     if (date) date.value = '';
     if (search) search.value = '';
+    state.deliveryStatusFilter = '';
+    state.pickupStatusFilter = '';
+    renderOrdersStatusDropdown();
     renderOrdersTable();
   });
   document.getElementById('pickupProductSearch')?.addEventListener('input', () => {
@@ -176,6 +522,7 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
     const pickupBtn = document.getElementById('addPickupOrderBtn');
     if (deliveryBtn) deliveryBtn.hidden = state.ordersFulfillment !== 'delivery';
     if (pickupBtn) pickupBtn.hidden = state.ordersFulfillment !== 'pickup';
+    renderOrdersStatusDropdown();
     await renderOrdersTable();
   }));
   const dateLabel = document.getElementById('ordersDateLabel');
@@ -185,6 +532,7 @@ if (window.location.pathname.endsWith('/dashboard.html')) {
   const pickupBtnInit = document.getElementById('addPickupOrderBtn');
   if (deliveryBtnInit) deliveryBtnInit.hidden = state.ordersFulfillment !== 'delivery';
   if (pickupBtnInit) pickupBtnInit.hidden = state.ordersFulfillment !== 'pickup';
+  renderOrdersStatusDropdown();
 
 }
 
@@ -803,16 +1151,23 @@ function renderDeliveryMemberSelectOptions(assignedMemberId, deliveryMembers) {
 async function renderOrdersTable() {
   const params = parseFilters();
   params.set('fulfillment', state.ordersFulfillment || 'delivery');
+  const isPickup = state.ordersFulfillment === 'pickup';
+  const activeStatus = isPickup ? (state.pickupStatusFilter || '') : (state.deliveryStatusFilter || '');
+  if (activeStatus) {
+    params.set('status', activeStatus);
+  } else {
+    params.delete('status');
+  }
   const requestId = ++state.ordersRequestId;
   const dateValue = document.getElementById('ordersCreatedDate')?.value || '';
   const searchValue = document.getElementById('ordersSearch')?.value.trim() || '';
   if (dateValue) params.set('orderDate', dateValue);
   if (searchValue) params.set('search', searchValue);
-  const filterActive = Boolean(dateValue || searchValue);
+  const filterActive = Boolean(dateValue || searchValue || activeStatus);
   params.set('page', '1');
   params.set('limit', '100');
   const firstPage = await api(`/orders?${params.toString()}`);
-  const orders = firstPage.orders || [];
+  let orders = firstPage.orders || [];
   if (filterActive && firstPage.pages > 1) {
     const remainingPages = [];
     for (let page = 2; page <= firstPage.pages; page += 1) {
@@ -824,6 +1179,11 @@ async function renderOrdersTable() {
     pages.forEach((result) => orders.push(...(result.orders || [])));
   }
   if (requestId !== state.ordersRequestId) return;
+  if (isPickup && activeStatus) {
+    orders = orders.filter((o) => pickupStatusForOrder(o, o.items || []) === activeStatus.toUpperCase());
+  } else if (!isPickup && activeStatus) {
+    orders = orders.filter((o) => String(o.status || 'PENDING').toUpperCase() === activeStatus.toUpperCase());
+  }
   let deliveryMembers = [];
   if (state.ordersFulfillment === 'delivery') try {
     const deliveryMembersData = await api('/delivery-members');
@@ -4759,6 +5119,20 @@ if (typeof module !== 'undefined' && module.exports) {
     displayProductCategory,
     state,
     renderOrdersTable,
+    renderOrdersStatusFilters,
+    renderOrdersStatusDropdown,
+    loadPromotions,
+    renderPromotionsTable,
+    openPromotionEditModal,
+    closePromotionEditModal,
+    openDeletePromotionModal,
+    closeDeletePromotionModal,
+    handleCreatePromotion,
+    handleSavePromotionEdit,
+    handleTogglePromotionStatus,
+    handleConfirmDeletePromotion,
+    DELIVERY_STATUS_FILTERS,
+    PICKUP_STATUS_FILTERS,
     renderOrderAmountEditor,
     isDeliveryTiffinOrder,
     openTiffinItemsEditor,

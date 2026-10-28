@@ -53,6 +53,7 @@ app.use('/api/customers', wrapRouter(require('./routes/customers')));
 app.use('/api/analytics', wrapRouter(require('./routes/analytics')));
 app.use('/api/export', wrapRouter(require('./routes/export')));
 app.use('/api/password-reset', wrapRouter(require('./routes/passwordReset')));
+app.use('/api/promotions', wrapRouter(require('./routes/promotions')));
 
 app.post('/api/clear-demo', authRequired, async (req, res) => {
   try {

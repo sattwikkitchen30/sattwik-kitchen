@@ -706,7 +706,16 @@ async function listOrders(req, res) {
     return res.status(400).json({ message: 'Fulfillment must be delivery or pickup.' });
   }
   const match = {};
-  if (status) match.status = new RegExp(`^${status}$`, 'i');
+  if (status) {
+    if (fulfillmentFilter === 'pickup') {
+      match.$or = [
+        { status: new RegExp(`^${status}$`, 'i') },
+        { 'items.deliveryStatus': new RegExp(`^${status}$`, 'i') }
+      ];
+    } else {
+      match.status = new RegExp(`^${status}$`, 'i');
+    }
+  }
   if (type) match.type = type;
   const createdAt = {};
   if (from) {

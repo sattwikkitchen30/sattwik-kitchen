@@ -912,6 +912,48 @@ function initializeTiffinPlanQuantities() {
   });
 }
 
+async function fetchPromotions() {
+  const section = document.getElementById('promotionsSection');
+  const container = document.getElementById('promotionsContainer');
+  if (!section || !container) return;
+
+  try {
+    const response = await fetch('/api/promotions');
+    if (!response.ok) throw new Error('Failed to load promotions');
+    const data = await response.json();
+    const promotions = Array.isArray(data.promotions) ? data.promotions : [];
+    const activePromotions = promotions.filter((p) => p && p.isActive !== false);
+
+    if (activePromotions.length === 0) {
+      container.innerHTML = '';
+      section.hidden = true;
+      return;
+    }
+
+    renderPromotions(activePromotions);
+    section.hidden = false;
+  } catch (error) {
+    console.warn('[promotions] Failed to load promotions:', error.message);
+    container.innerHTML = '';
+    section.hidden = true;
+  }
+}
+
+function renderPromotions(promotions) {
+  const container = document.getElementById('promotionsContainer');
+  if (!container) return;
+
+  container.innerHTML = promotions.map((p) => `
+    <article class="promotion-banner" role="region" aria-label="${escapeProductHtml(p.title)}">
+      <div class="promotion-banner-header">
+        <span class="promotion-badge">✨ Festive Special</span>
+      </div>
+      <h3 class="promotion-title">${escapeProductHtml(p.title)}</h3>
+      <p class="promotion-description">${escapeProductHtml(p.description)}</p>
+    </article>
+  `).join('');
+}
+
 async function fetchDeliveryPlans() {
   try {
     const response = await fetch('/api/delivery-plans/public');
@@ -1112,10 +1154,12 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     fetchProducts();
     fetchDeliveryPlans();
+    fetchPromotions();
   });
 } else {
   fetchProducts();
   fetchDeliveryPlans();
+  fetchPromotions();
 }
 
 customerDetailsForm?.addEventListener('submit', async (event) => {
@@ -1495,6 +1539,8 @@ if (typeof module !== 'undefined' && module.exports) {
     updateQty,
     initializeTiffinPlanQuantities,
     renderDeliveryPlans,
+    fetchPromotions,
+    renderPromotions,
     renderProductDescriptionHtml,
     toggleProductDescription,
     initStaticProductDescriptions,

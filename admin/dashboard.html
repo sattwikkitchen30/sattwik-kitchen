@@ -27,6 +27,7 @@
       <button class="nav-item active" data-view="overview">Overview</button>
       <button class="nav-item" data-view="orders">Orders</button>
       <button class="nav-item" data-view="products">Products</button>
+      <button class="nav-item" data-view="promotions">Promotions</button>
       <button class="nav-item" data-view="customers">Customers</button>
       <button class="nav-item" data-view="custom">Custom & Catering</button>
       <button class="nav-item" data-view="exports">Exports</button>
@@ -122,13 +123,35 @@
           <button class="orders-tab" type="button" role="tab" aria-selected="false" data-fulfillment-tab="pickup">Pickup</button>
         </div>
         <div class="orders-filter-bar" role="search" aria-label="Filter orders">
+          <label id="deliveryStatusFilterLabel" class="orders-status-field">
+            <span>Status</span>
+            <select id="deliveryStatusFilter" aria-label="Filter delivery orders by status">
+              <option value="">All Statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="ACCEPTED">Accepted</option>
+              <option value="OUT_FOR_DELIVERY">Out for Delivery</option>
+              <option value="DELIVERED">Delivered</option>
+              <option value="CANCELLED">Cancelled</option>
+              <option value="EXPIRED">Expired</option>
+            </select>
+          </label>
+          <label id="pickupStatusFilterLabel" class="orders-status-field" hidden>
+            <span>Status</span>
+            <select id="pickupStatusFilter" aria-label="Filter pickup orders by status">
+              <option value="">All Statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="ACCEPTED">Accepted</option>
+              <option value="DELIVERED">Delivered</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </label>
           <label>
             <span id="ordersDateLabel">Delivery start date</span>
             <input id="ordersCreatedDate" type="date" />
           </label>
           <label class="orders-search-field">
             Search orders
-            <input id="ordersSearch" type="search" placeholder="Name, order ID, email, phone, address, or status" autocomplete="off" />
+            <input id="ordersSearch" type="search" placeholder="Search by name, order ID, email, phone, or address" autocomplete="off" />
           </label>
           <button id="ordersFilterReset" class="btn btn-secondary" type="button">Clear filters</button>
           <span id="ordersResultCount" class="orders-result-count" aria-live="polite"></span>
@@ -171,6 +194,39 @@
           </div>
           <div id="deliveryPlansContent"></div>
         </div>
+      </div>
+    </section>
+
+    <section id="promotionsView" class="view-panel">
+      <div class="panel card">
+        <div class="panel-head">
+          <div>
+            <h3>Create New Promotion</h3>
+            <p style="margin: 4px 0 0; font-size: 13px; color: var(--muted);">New promotions are active immediately and appear prominently on the customer menu.</p>
+          </div>
+        </div>
+        <form id="createPromotionForm" class="stacked-form" novalidate>
+          <label>
+            <span>Promotion Title *</span>
+            <input id="promotionTitle" type="text" required autocomplete="off" placeholder="e.g. Diwali Festive Special" />
+            <span class="field-error" id="promotionTitleError" hidden style="color: var(--rose); font-size: 11px; margin-top: 2px;"></span>
+          </label>
+          <label>
+            <span>Promotion Description *</span>
+            <textarea id="promotionDescription" rows="3" required placeholder="e.g. Enjoy 10% extra sweets with every Full Meal Tiffin package this week!"></textarea>
+            <span class="field-error" id="promotionDescriptionError" hidden style="color: var(--rose); font-size: 11px; margin-top: 2px;"></span>
+          </label>
+          <button id="savePromotionBtn" type="submit" class="btn btn-primary">Create Promotion</button>
+          <p id="createPromotionMessage" class="form-message" aria-live="polite"></p>
+        </form>
+      </div>
+
+      <div class="panel card">
+        <div class="panel-head">
+          <h3>Existing Promotions</h3>
+          <span id="promotionsCountBadge" class="orders-result-count"></span>
+        </div>
+        <div id="promotionsTable" class="table-shell large"></div>
       </div>
     </section>
 
@@ -856,6 +912,55 @@
         </div>
         <p id="orderCommentsMessage" class="form-message" aria-live="polite"></p>
       </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Promotion edit modal
+       ===================================================================== -->
+  <div id="promotionEditModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="promotionEditTitle" hidden>
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h3 id="promotionEditTitle">Edit Promotion</h3>
+        <button type="button" class="modal-close" id="promotionEditCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <form id="promotionEditForm" class="stacked-form" novalidate>
+        <input type="hidden" id="editPromotionId" />
+        <label>
+          <span>Promotion Title *</span>
+          <input id="editPromotionTitle" type="text" required autocomplete="off" />
+          <span class="field-error" id="editPromotionTitleError" hidden style="color: var(--rose); font-size: 11px; margin-top: 2px;"></span>
+        </label>
+        <label>
+          <span>Promotion Description *</span>
+          <textarea id="editPromotionDescription" rows="4" required></textarea>
+          <span class="field-error" id="editPromotionDescriptionError" hidden style="color: var(--rose); font-size: 11px; margin-top: 2px;"></span>
+        </label>
+        <p id="editPromotionMessage" class="form-message" aria-live="polite"></p>
+        <div class="modal-actions" style="display: flex; gap: 10px; margin-top: 14px;">
+          <button id="savePromotionEditBtn" type="submit" class="btn btn-primary">Save Changes</button>
+          <button id="cancelPromotionEditBtn" type="button" class="btn btn-secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Delete promotion confirmation modal
+       ===================================================================== -->
+  <div id="deletePromotionModal" class="modal-backdrop" aria-modal="true" role="dialog" aria-labelledby="deletePromotionTitle" hidden>
+    <div class="modal-shell">
+      <div class="modal-header">
+        <h3 id="deletePromotionTitle">Delete Promotion</h3>
+        <button type="button" class="modal-close" id="deletePromotionCloseBtn" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="deletePromotionMessageText" style="margin: 0 0 16px; color: var(--ink);">Are you sure you want to permanently delete this promotion?</p>
+        <div class="modal-actions" style="display: flex; gap: 10px;">
+          <button id="confirmDeletePromotionBtn" class="btn btn-danger" type="button">Delete</button>
+          <button id="cancelDeletePromotionBtn" class="btn btn-secondary" type="button">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 

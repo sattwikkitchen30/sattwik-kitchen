@@ -832,7 +832,11 @@ a { color: inherit; text-decoration: none; }
   font-size: 12px;
   font-weight: 800;
 }
-.orders-filter-bar input {
+.orders-filter-bar label[hidden] {
+  display: none !important;
+}
+.orders-filter-bar input,
+.orders-filter-bar select {
   min-height: 42px;
   width: 100%;
   border: 1px solid var(--border);
@@ -840,10 +844,17 @@ a { color: inherit; text-decoration: none; }
   padding: 9px 11px;
   background: white;
   color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
 }
-.orders-filter-bar input:focus {
+.orders-filter-bar input:focus,
+.orders-filter-bar select:focus {
   outline: 2px solid rgba(12,122,98,.2);
   border-color: var(--green);
+}
+.orders-filter-bar .orders-status-field {
+  min-width: 160px;
+  flex: 0 1 180px;
 }
 .orders-filter-bar .orders-search-field {
   flex: 1 1 320px;
@@ -1450,7 +1461,7 @@ th {
   font-weight: 800;
   color: var(--muted);
 }
-.stacked-form input, .stacked-form select {
+.stacked-form input, .stacked-form select, .stacked-form textarea {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1458,8 +1469,41 @@ th {
   padding: 12px 13px;
   background: white;
   color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
 }
-.stacked-form input:focus, .stacked-form select:focus { outline: 2px solid rgba(12,122,98,.2); border-color: var(--green); }
+.stacked-form textarea {
+  min-height: 84px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.stacked-form input:focus, .stacked-form select:focus, .stacked-form textarea:focus { outline: 2px solid rgba(12,122,98,.2); border-color: var(--green); }
+.field-error {
+  color: var(--rose);
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 4px;
+  display: block;
+}
+.promotions-actions-cell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.promotions-actions-cell .btn {
+  padding: 6px 12px;
+  min-height: 32px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.promotion-desc-cell {
+  max-width: 380px;
+  white-space: normal;
+  word-break: break-word;
+  color: #55443c;
+  line-height: 1.45;
+}
 .form-message.success { color: var(--green); }
 .admin-date-save-toast {
   position: fixed;

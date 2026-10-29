@@ -16,7 +16,9 @@ function publicCustomer(customer) {
     email: customer.email,
     phone: customer.phone,
     address: customer.address || '',
-    area: customer.area || ''
+    area: customer.area || '',
+    deliveryAddress: customer.address || '',
+    deliveryArea: customer.area || ''
   };
 }
 
@@ -112,12 +114,14 @@ async function updateCustomerProfile(req, res) {
       customer.email = email;
     }
 
-    if (rawArea !== undefined) {
-      customer.area = String(rawArea).trim();
+    const rawAreaValue = rawArea !== undefined ? rawArea : req.body?.deliveryArea;
+    if (rawAreaValue !== undefined) {
+      customer.area = String(rawAreaValue).trim();
     }
 
-    if (rawAddress !== undefined) {
-      customer.address = String(rawAddress).trim();
+    const rawAddressValue = rawAddress !== undefined ? rawAddress : req.body?.deliveryAddress;
+    if (rawAddressValue !== undefined) {
+      customer.address = String(rawAddressValue).trim();
     }
 
     // Check for duplicate conflicts with other customers

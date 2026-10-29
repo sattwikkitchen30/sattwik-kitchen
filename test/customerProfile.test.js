@@ -232,6 +232,104 @@ test('Customer Edit Profile - Comprehensive Test Suite', async (t) => {
     assert.ok(mainJs.includes('/api/customer-auth/profile'), 'script.js must call /api/customer-auth/profile');
   });
 
+  await t.test('4b. Frontend Execution: updateCustomerAuthUI toggles customerProfileBtn visibility and navigation links dynamically', () => {
+    const vm = require('node:vm');
+    const scriptCode = fs.readFileSync(path.join(__dirname, '../public/script.js'), 'utf8');
+
+    function createMockElement(id) {
+      const classes = new Set(['hidden']);
+      return {
+        id,
+        classList: {
+          add: (cls) => classes.add(cls),
+          remove: (cls) => classes.delete(cls),
+          toggle: (cls, force) => {
+            if (force === true) classes.add(cls);
+            else if (force === false) classes.delete(cls);
+            else if (classes.has(cls)) classes.delete(cls);
+            else classes.add(cls);
+            return classes.has(cls);
+          },
+          contains: (cls) => classes.has(cls)
+        },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        querySelectorAll: () => [],
+        querySelector: () => null,
+        setAttribute: () => {},
+        getAttribute: () => null,
+        appendChild: (el) => el
+      };
+    }
+
+    const elements = {
+      customerAccountLink: createMockElement('customerAccountLink'),
+      customerOrdersLink: createMockElement('customerOrdersLink'),
+      customerProfileBtn: createMockElement('customerProfileBtn'),
+      customerLogoutBtn: createMockElement('customerLogoutBtn')
+    };
+    elements.customerAccountLink.classList.remove('hidden');
+
+    let storedToken = null;
+    const mockLocalStorage = {
+      getItem: (key) => (key === 'sattwikCustomerToken' ? storedToken : null),
+      setItem: (key, val) => { if (key === 'sattwikCustomerToken') storedToken = val; },
+      removeItem: (key) => { if (key === 'sattwikCustomerToken') storedToken = null; }
+    };
+
+    const sandbox = {
+      document: {
+        getElementById: (id) => elements[id] || (elements[id] = createMockElement(id)),
+        querySelector: (sel) => createMockElement(sel),
+        querySelectorAll: () => [],
+        addEventListener: () => {}
+      },
+      window: {
+        addEventListener: () => {},
+        location: { href: '', search: '', pathname: '/' }
+      },
+      localStorage: mockLocalStorage,
+      fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+      URLSearchParams,
+      console,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      IntersectionObserver: class { observe() {} unobserve() {} },
+      module: { exports: {} },
+      exports: {}
+    };
+
+    vm.createContext(sandbox);
+    vm.runInContext(scriptCode, sandbox);
+
+    const { updateCustomerAuthUI } = sandbox.module.exports;
+    assert.equal(typeof updateCustomerAuthUI, 'function', 'updateCustomerAuthUI must be a function exported by public/script.js');
+
+    // Test 1: Logged out initially (no token)
+    storedToken = null;
+    updateCustomerAuthUI();
+    assert.equal(elements.customerAccountLink.classList.contains('hidden'), false, 'Account link must be visible when logged out');
+    assert.equal(elements.customerOrdersLink.classList.contains('hidden'), true, 'My Orders link must be hidden when logged out');
+    assert.equal(elements.customerProfileBtn.classList.contains('hidden'), true, 'Edit Profile button must be hidden when logged out');
+    assert.equal(elements.customerLogoutBtn.classList.contains('hidden'), true, 'Logout button must be hidden when logged out');
+
+    // Test 2: Customer logs in (token present)
+    storedToken = 'valid_customer_jwt_token_12345';
+    updateCustomerAuthUI();
+    assert.equal(elements.customerAccountLink.classList.contains('hidden'), true, 'Account link must be hidden when logged in');
+    assert.equal(elements.customerOrdersLink.classList.contains('hidden'), false, 'My Orders link must be visible when logged in');
+    assert.equal(elements.customerProfileBtn.classList.contains('hidden'), false, 'Edit Profile button must be visible when logged in');
+    assert.equal(elements.customerLogoutBtn.classList.contains('hidden'), false, 'Logout button must be visible when logged in');
+
+    // Test 3: Customer logs out (token removed)
+    storedToken = null;
+    updateCustomerAuthUI();
+    assert.equal(elements.customerAccountLink.classList.contains('hidden'), false, 'Account link must be visible again after logout');
+    assert.equal(elements.customerOrdersLink.classList.contains('hidden'), true, 'My Orders link must be hidden after logout');
+    assert.equal(elements.customerProfileBtn.classList.contains('hidden'), true, 'Edit Profile button must be hidden after logout');
+    assert.equal(elements.customerLogoutBtn.classList.contains('hidden'), true, 'Logout button must be hidden after logout');
+  });
+
   // ─── 2. Backend Route & Middleware Inspection ─────────────────────────────
   await t.test('5. Express Route Registration: PUT endpoints exist for customer profile updates', () => {
     const customerAuthRoutes = customerAuthRouter.stack
@@ -402,5 +500,31 @@ test('Customer Edit Profile - Comprehensive Test Suite', async (t) => {
     const saved = mockCustomers.get(customerId1);
     assert.equal(saved.firstName, 'Aarav');
     assert.equal(saved.lastName, 'Kumar Patel');
+  });
+
+  await t.test('14. Field Mapping & Aliases: accepts and returns both area/address and deliveryArea/deliveryAddress seamlessly', async () => {
+    const { req, res } = mockReqRes({
+      customer: { _id: customerId2 },
+      body: {
+        firstName: 'Rahul',
+        lastName: 'Verma',
+        email: 'rahul@example.com',
+        phone: '604-555-0202',
+        deliveryArea: 'Richmond',
+        deliveryAddress: '789 No 3 Rd, Apt 12'
+      }
+    });
+
+    await updateCustomerProfile(req, res);
+    assert.equal(res.statusCode, 200);
+
+    const saved = mockCustomers.get(customerId2);
+    assert.equal(saved.area, 'Richmond', 'deliveryArea alias must save into customer.area');
+    assert.equal(saved.address, '789 No 3 Rd, Apt 12', 'deliveryAddress alias must save into customer.address');
+
+    assert.equal(res._json?.customer?.area, 'Richmond');
+    assert.equal(res._json?.customer?.address, '789 No 3 Rd, Apt 12');
+    assert.equal(res._json?.customer?.deliveryArea, 'Richmond');
+    assert.equal(res._json?.customer?.deliveryAddress, '789 No 3 Rd, Apt 12');
   });
 });

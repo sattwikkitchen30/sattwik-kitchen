@@ -161,6 +161,7 @@ test('Customer Edit Profile - Comprehensive Test Suite', async (t) => {
     const plansIdx = navContent.indexOf('href="#plans"');
     const cateringIdx = navContent.indexOf('href="#catering"');
     const contactIdx = navContent.indexOf('href="#contact"');
+    const aboutIdx = navContent.indexOf('About Us');
     const ordersIdx = navContent.indexOf('id="customerOrdersLink"');
     const profileIdx = navContent.indexOf('id="customerProfileBtn"');
     const logoutIdx = navContent.indexOf('id="customerLogoutBtn"');
@@ -169,6 +170,7 @@ test('Customer Edit Profile - Comprehensive Test Suite', async (t) => {
     assert.ok(plansIdx !== -1, 'Tiffin Plans link must exist in nav');
     assert.ok(cateringIdx !== -1, 'Catering link must exist in nav');
     assert.ok(contactIdx !== -1, 'Contact link must exist in nav');
+    assert.ok(aboutIdx !== -1, 'About Us link must exist in nav');
     assert.ok(ordersIdx !== -1, 'My Orders link must exist in nav');
     assert.ok(profileIdx !== -1, 'Edit Profile button must exist in nav');
     assert.ok(logoutIdx !== -1, 'Logout button must exist in nav');
@@ -176,7 +178,8 @@ test('Customer Edit Profile - Comprehensive Test Suite', async (t) => {
     assert.ok(menuIdx < plansIdx, 'Menu must precede Tiffin Plans');
     assert.ok(plansIdx < cateringIdx, 'Tiffin Plans must precede Catering');
     assert.ok(cateringIdx < contactIdx, 'Catering must precede Contact');
-    assert.ok(contactIdx < ordersIdx, 'Contact must precede My Orders');
+    assert.ok(contactIdx < aboutIdx, 'Contact must precede About Us');
+    assert.ok(aboutIdx < ordersIdx, 'About Us must precede My Orders');
     assert.ok(ordersIdx < profileIdx, 'My Orders must precede Edit Profile');
     assert.ok(profileIdx < logoutIdx, 'Edit Profile must immediately precede Logout');
   });
@@ -193,11 +196,16 @@ test('Customer Edit Profile - Comprehensive Test Suite', async (t) => {
     const navMatch = publicHtml.match(/<nav class="nav-links"[^>]*>([\s\S]*?)<\/nav>/);
     assert.ok(navMatch, 'public/index.html must have <nav class="nav-links">');
     const navContent = navMatch[1];
+    const contactIdx = navContent.indexOf('Contact');
+    const aboutIdx = navContent.indexOf('About Us');
     const ordersIdx = navContent.indexOf('id="customerOrdersLink"');
     const profileIdx = navContent.indexOf('id="customerProfileBtn"');
     const logoutIdx = navContent.indexOf('id="customerLogoutBtn"');
 
+    assert.ok(aboutIdx !== -1, 'public/index.html must have About Us link in nav');
     assert.ok(ordersIdx !== -1 && profileIdx !== -1 && logoutIdx !== -1, 'Orders, Profile, and Logout must exist');
+    assert.ok(contactIdx < aboutIdx, 'Contact must precede About Us in public/index.html');
+    assert.ok(aboutIdx < ordersIdx, 'About Us must precede Orders in public/index.html');
     assert.ok(ordersIdx < profileIdx, 'Orders must precede Profile in public/index.html');
     assert.ok(profileIdx < logoutIdx, 'Profile must precede Logout in public/index.html');
   });

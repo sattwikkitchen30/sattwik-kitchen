@@ -490,3 +490,148 @@ fieldset.profile-section {
     line-height: 1.5;
   }
 }
+
+
+/* ==========================================================================
+   About Us Page Styles
+   ========================================================================== */
+.about-hero-section {
+  background: linear-gradient(135deg, var(--cream) 0%, #fff 55%, #f8f1e6 100%);
+  padding: 68px 0 42px;
+  text-align: center;
+  border-bottom: 1px solid rgba(74, 35, 15, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+.about-hero-section::before {
+  content: "";
+  position: absolute;
+  width: 480px;
+  height: 480px;
+  border-radius: 50%;
+  right: -140px;
+  top: -160px;
+  border: 1px solid rgba(200, 155, 84, 0.2);
+  pointer-events: none;
+}
+.about-hero-section::after {
+  content: "";
+  position: absolute;
+  width: 380px;
+  height: 380px;
+  border-radius: 50%;
+  left: -120px;
+  bottom: -160px;
+  border: 1px solid rgba(12, 122, 98, 0.12);
+  pointer-events: none;
+}
+.about-kicker {
+  display: inline-block;
+  margin-bottom: 16px;
+  font-size: 13px;
+  letter-spacing: 2.8px;
+  font-weight: 800;
+  color: var(--green);
+  text-transform: uppercase;
+  text-align: center;
+}
+.about-title {
+  margin: 0 auto;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(36px, 4.8vw, 56px);
+  font-weight: 700;
+  color: var(--brown);
+  line-height: 1.15;
+  letter-spacing: -1.2px;
+  text-align: center;
+}
+.about-tagline {
+  margin: 14px auto 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-style: italic;
+  font-size: clamp(20px, 2.4vw, 27px);
+  color: var(--green);
+  text-align: center;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.about-content-section {
+  padding: 56px 0 84px;
+  background: var(--cream);
+}
+.about-container {
+  max-width: 860px;
+  margin: 0 auto;
+}
+.about-card {
+  background: #fff;
+  border: 1px solid #eadfce;
+  border-radius: var(--radius);
+  padding: clamp(32px, 5vw, 56px);
+  box-shadow: 0 14px 40px rgba(49, 29, 18, 0.06);
+}
+.about-heading {
+  margin: 0 0 24px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(26px, 3.2vw, 34px);
+  color: var(--brown);
+  line-height: 1.25;
+  letter-spacing: -0.6px;
+  position: relative;
+  padding-bottom: 14px;
+}
+.about-heading::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 52px;
+  height: 3px;
+  background: var(--gold);
+  border-radius: 2px;
+}
+.about-paragraph {
+  margin: 0 0 22px;
+  font-size: 16.5px;
+  line-height: 1.75;
+  color: #4b392f;
+  font-weight: 400;
+}
+.about-paragraph:last-of-type {
+  margin-bottom: 28px;
+}
+.about-signoff {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px dashed #e2d2c1;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(18px, 2.2vw, 22px);
+  color: var(--brown);
+  letter-spacing: -0.2px;
+}
+.about-signoff strong {
+  font-weight: 700;
+}
+.nav-links > a.active {
+  color: var(--green);
+}
+.nav-links > a.active::after {
+  right: 0;
+}
+@media (max-width: 700px) {
+  .about-hero-section {
+    padding: 40px 0 26px;
+  }
+  .about-content-section {
+    padding: 28px 0 56px;
+  }
+  .about-card {
+    padding: 24px 18px;
+    border-radius: var(--radius-sm);
+  }
+  .about-paragraph {
+    font-size: 15px;
+    line-height: 1.65;
+    margin-bottom: 18px;
+  }
+}

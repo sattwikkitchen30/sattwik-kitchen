@@ -15,8 +15,49 @@ try {
   }
 }
 
+let Resend = null;
+try {
+  ({ Resend } = require('resend'));
+} catch (e1) {
+  try {
+    const path = require('path');
+    const resendPath = require.resolve('resend', {
+      paths: [process.cwd(), path.resolve(__dirname, '../../')]
+    });
+    ({ Resend } = require(resendPath));
+  } catch (e2) {
+    Resend = null;
+  }
+}
+
 function getNodemailer() {
   return nodemailer;
+}
+
+function getResendModule() {
+  return Resend;
+}
+
+let _cachedResendClient = null;
+let _cachedResendApiKey = null;
+
+function getResendClient() {
+  const apiKey = (process.env.RESEND_API_KEY || '').trim();
+  if (!apiKey) return null;
+  if (!Resend) return null;
+
+  if (_cachedResendClient && _cachedResendApiKey === apiKey) {
+    return _cachedResendClient;
+  }
+
+  _cachedResendClient = new Resend(apiKey);
+  _cachedResendApiKey = apiKey;
+  return _cachedResendClient;
+}
+
+function _setResendClientForTesting(client) {
+  _cachedResendClient = client;
+  _cachedResendApiKey = client ? (process.env.RESEND_API_KEY || 'test-key') : null;
 }
 
 const _devOutbox = new Map();
@@ -30,25 +71,36 @@ function getBaseUrl() {
   return `http://localhost:${port}`;
 }
 
-function isEmailConfigured() {
-  if (!nodemailer) return false;
-  if (process.env.SMTP_URL) return true;
+function getActiveEmailProvider() {
+  if (process.env.RESEND_API_KEY && String(process.env.RESEND_API_KEY).trim()) {
+    return 'resend';
+  }
+  if (!nodemailer) return null;
+  if (process.env.SMTP_URL) return 'smtp';
   if (
     process.env.EMAIL_SERVICE &&
     (process.env.EMAIL_USER || process.env.SMTP_USER) &&
     (process.env.EMAIL_PASS || process.env.SMTP_PASS)
   ) {
-    return true;
+    return 'smtp';
   }
-  return Boolean(
+  if (
     process.env.SMTP_HOST &&
     (process.env.SMTP_USER || process.env.EMAIL_USER) &&
     (process.env.SMTP_PASS || process.env.EMAIL_PASS)
-  );
+  ) {
+    return 'smtp';
+  }
+  return null;
+}
+
+function isEmailConfigured() {
+  return getActiveEmailProvider() !== null;
 }
 
 function getTransporter() {
-  if (!isEmailConfigured()) return null;
+  const provider = getActiveEmailProvider();
+  if (provider !== 'smtp') return null;
 
   if (process.env.SMTP_URL) {
     return nodemailer.createTransport(process.env.SMTP_URL);
@@ -79,11 +131,15 @@ function getTransporter() {
 }
 
 function logEmailStatusOnStartup() {
-  if (isEmailConfigured()) {
+  const provider = getActiveEmailProvider();
+  if (provider === 'resend') {
+    const fromAddress = process.env.EMAIL_FROM || 'Sattwik Kitchen <noreply@send.sattwikkitchen.ca>';
+    console.log(`[emailService] Resend email service configured (sender: ${fromAddress}).`);
+  } else if (provider === 'smtp') {
     const host = process.env.SMTP_HOST || process.env.EMAIL_SERVICE || 'configured service';
     console.log(`[emailService] SMTP email service configured (${host}).`);
   } else {
-    console.warn('[emailService] Notice: SMTP / email provider is not configured in .env. Password reset emails will not be sent to real inboxes. Configure SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and EMAIL_FROM in .env to enable email delivery.');
+    console.warn('[emailService] Notice: Neither Resend nor SMTP email provider is configured. Password reset emails will not be sent to real inboxes. Configure RESEND_API_KEY and EMAIL_FROM in .env to enable email delivery.');
   }
 }
 
@@ -163,10 +219,45 @@ Sattwik Kitchen Team`;
 </body>
 </html>`;
 
-  // Check if live SMTP is configured
-  if (isEmailConfigured()) {
+  const provider = getActiveEmailProvider();
+  const fromAddress = process.env.EMAIL_FROM || process.env.SMTP_FROM || 'Sattwik Kitchen <noreply@send.sattwikkitchen.ca>';
+
+  // 1. Primary provider: Resend API
+  if (provider === 'resend') {
+    const client = getResendClient();
+    if (!client) {
+      console.error(`[emailService] [ERROR] Resend client initialization failed for ${maskEmail(cleanEmail)}: SDK could not be initialized.`);
+      throw new Error('Email delivery failed: Resend client initialization failed');
+    }
+
+    try {
+      const { data, error } = await client.emails.send({
+        from: fromAddress,
+        to: cleanEmail,
+        subject,
+        text: textContent,
+        html: htmlContent
+      });
+
+      if (error) {
+        console.error(`[emailService] [ERROR] Resend delivery failed for ${maskEmail(cleanEmail)}:`, error.message || error);
+        throw new Error(`Email delivery failed: ${error.message || 'Resend API error'}`);
+      }
+
+      const messageId = data?.id || 'resend-ok';
+      console.log(`[emailService] Password reset email sent successfully via Resend to ${maskEmail(cleanEmail)} (messageId: ${messageId})`);
+      return { success: true, delivered: true, provider: 'resend', messageId };
+    } catch (err) {
+      if (!err.message.startsWith('Email delivery failed:')) {
+        console.error(`[emailService] [ERROR] Resend delivery exception for ${maskEmail(cleanEmail)}:`, err.message);
+      }
+      throw err.message.startsWith('Email delivery failed:') ? err : new Error(`Email delivery failed: ${err.message}`);
+    }
+  }
+
+  // 2. Fallback provider: SMTP (Nodemailer)
+  if (provider === 'smtp') {
     const transporter = getTransporter();
-    const fromAddress = process.env.EMAIL_FROM || process.env.SMTP_FROM || '"Sattwik Kitchen" <no-reply@sattwikkitchen.com>';
     try {
       const info = await transporter.sendMail({
         from: fromAddress,
@@ -175,15 +266,15 @@ Sattwik Kitchen Team`;
         text: textContent,
         html: htmlContent
       });
-      console.log(`[emailService] Password reset email sent successfully to ${maskEmail(cleanEmail)} (messageId: ${info.messageId})`);
-      return { success: true, delivered: true, messageId: info.messageId };
+      console.log(`[emailService] Password reset email sent successfully via SMTP to ${maskEmail(cleanEmail)} (messageId: ${info.messageId})`);
+      return { success: true, delivered: true, provider: 'smtp', messageId: info.messageId };
     } catch (err) {
       console.error(`[emailService] [ERROR] SMTP delivery failed for ${maskEmail(cleanEmail)}:`, err.message);
       throw new Error(`Email delivery failed: ${err.message}`);
     }
   }
 
-  // Safe development / fallback mode: SMTP is not configured
+  // 3. Safe development / fallback mode: Neither Resend nor SMTP is configured
   _devOutbox.set(cleanEmail, {
     to: cleanEmail,
     name,
@@ -194,15 +285,15 @@ Sattwik Kitchen Team`;
   });
 
   console.warn(
-    `[emailService] [WARNING] Password reset email NOT sent to ${maskEmail(cleanEmail)}: SMTP provider is not configured in .env. ` +
-    `Configure SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and EMAIL_FROM in your .env file to enable delivery.`
+    `[emailService] [WARNING] Password reset email NOT sent to ${maskEmail(cleanEmail)}: Neither Resend nor SMTP provider is configured in .env. ` +
+    `Configure RESEND_API_KEY and EMAIL_FROM in your .env file to enable delivery.`
   );
 
   return {
     success: true,
     delivered: false,
     simulated: true,
-    notice: 'SMTP is unconfigured; captured for local testing.'
+    notice: 'Neither Resend nor SMTP is configured; captured for local testing.'
   };
 }
 
@@ -240,13 +331,17 @@ function clearDevOutbox() {
 module.exports = {
   sendPasswordResetEmail,
   isEmailConfigured,
+  getActiveEmailProvider,
   getBaseUrl,
   maskEmail,
   getTransporter,
   getNodemailer,
+  getResendClient,
+  getResendModule,
   logEmailStatusOnStartup,
   getDevLastResetToken,
   getDevLastResetUrl,
   getDevLastEntry,
-  clearDevOutbox
+  clearDevOutbox,
+  _setResendClientForTesting
 };

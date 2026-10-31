@@ -680,6 +680,7 @@ test('Sattwik Kitchen: Comprehensive Password Reset Test Suite', async (t) => {
     assert.ok(testAccount.user, 'Ethereal SMTP test user must be created');
 
     const origEnv = { ...process.env };
+    delete process.env.RESEND_API_KEY;
     process.env.SMTP_HOST = testAccount.smtp.host;
     process.env.SMTP_PORT = String(testAccount.smtp.port);
     process.env.SMTP_SECURE = String(testAccount.smtp.secure);
@@ -703,6 +704,204 @@ test('Sattwik Kitchen: Comprehensive Password Reset Test Suite', async (t) => {
       assert.equal(result.delivered, true, 'Email must be delivered via live SMTP');
       assert.ok(result.messageId, 'Nodemailer must return a valid messageId from SMTP server');
     } finally {
+      process.env = origEnv;
+    }
+  });
+
+  // ─── 14. Resend Configuration & Provider Detection ────────────────────────
+  await t.test('14. Resend Configuration: Correctly identifies Resend as primary email provider when RESEND_API_KEY is set', () => {
+    const { isEmailConfigured, getActiveEmailProvider } = require('../server/utils/emailService');
+    const origEnv = { ...process.env };
+
+    try {
+      // 1. With RESEND_API_KEY
+      process.env.RESEND_API_KEY = 're_test_mock_api_key_123';
+      delete process.env.SMTP_HOST;
+      delete process.env.SMTP_USER;
+      delete process.env.SMTP_PASS;
+      delete process.env.SMTP_URL;
+      delete process.env.EMAIL_SERVICE;
+
+      assert.equal(isEmailConfigured(), true, 'isEmailConfigured must be true when RESEND_API_KEY is present');
+      assert.equal(getActiveEmailProvider(), 'resend', 'Active provider must be resend');
+
+      // 2. Resend takes priority even if SMTP is also configured
+      process.env.SMTP_HOST = 'smtp.gmail.com';
+      process.env.SMTP_USER = 'test@example.com';
+      process.env.SMTP_PASS = 'secretpass';
+      assert.equal(getActiveEmailProvider(), 'resend', 'Resend must take priority over SMTP');
+
+      // 3. Without RESEND_API_KEY, falls back to SMTP
+      delete process.env.RESEND_API_KEY;
+      assert.equal(getActiveEmailProvider(), 'smtp', 'Provider must fall back to smtp when RESEND_API_KEY is unset');
+
+      // 4. Without either, provider is null and isEmailConfigured is false
+      delete process.env.SMTP_HOST;
+      delete process.env.SMTP_USER;
+      delete process.env.SMTP_PASS;
+      assert.equal(getActiveEmailProvider(), null, 'Provider must be null when neither is configured');
+      assert.equal(isEmailConfigured(), false, 'isEmailConfigured must be false when unconfigured');
+    } finally {
+      process.env = origEnv;
+    }
+  });
+
+  // ─── 15. Resend Successful Email Delivery ─────────────────────────────────
+  await t.test('15. Resend Successful Sending: Dispatches password reset email via Resend SDK with proper parameters', async () => {
+    const { sendPasswordResetEmail, _setResendClientForTesting } = require('../server/utils/emailService');
+    const origEnv = { ...process.env };
+
+    process.env.RESEND_API_KEY = 're_test_mock_api_key_123';
+    process.env.EMAIL_FROM = 'Sattwik Kitchen <noreply@send.sattwikkitchen.ca>';
+    process.env.APP_BASE_URL = 'https://sattwikkitchen.ca';
+
+    let dispatchedPayload = null;
+    const mockResend = {
+      emails: {
+        send: async (payload) => {
+          dispatchedPayload = payload;
+          return { data: { id: 're_msg_mock_abc123' }, error: null };
+        }
+      }
+    };
+
+    _setResendClientForTesting(mockResend);
+
+    try {
+      const result = await sendPasswordResetEmail({
+        to: 'customer.resend@example.com',
+        name: 'Resend Customer',
+        accountType: 'customer',
+        rawToken: 'token-resend-test-456'
+      });
+
+      assert.equal(result.success, true, 'Result success must be true');
+      assert.equal(result.delivered, true, 'Result delivered must be true');
+      assert.equal(result.provider, 'resend', 'Provider must be resend');
+      assert.equal(result.messageId, 're_msg_mock_abc123', 'Message ID must match Resend response');
+
+      assert.ok(dispatchedPayload, 'Resend send() must have been called');
+      assert.equal(dispatchedPayload.from, 'Sattwik Kitchen <noreply@send.sattwikkitchen.ca>');
+      assert.equal(dispatchedPayload.to, 'customer.resend@example.com');
+      assert.equal(dispatchedPayload.subject, 'Reset Your Sattwik Kitchen Customer Password');
+      assert.ok(dispatchedPayload.text.includes('token-resend-test-456'), 'Plaintext must include reset token');
+      assert.ok(dispatchedPayload.html.includes('https://sattwikkitchen.ca/reset-password.html?token=token-resend-test-456&amp;type=customer'), 'HTML must include full reset URL with escaped HTML attributes');
+      assert.ok(dispatchedPayload.html.includes('https://res.cloudinary.com/spfurewl/image/upload/v1789330411/sattwik-logo.png'), 'HTML must contain brand logo');
+    } finally {
+      _setResendClientForTesting(null);
+      process.env = origEnv;
+    }
+  });
+
+  // ─── 16. Resend Error Handling & Safe Logging ─────────────────────────────
+  await t.test('16. Resend Error Handling: API errors are caught, logged safely without secrets, and throw formatted error', async () => {
+    const { sendPasswordResetEmail, _setResendClientForTesting } = require('../server/utils/emailService');
+    const origEnv = { ...process.env };
+
+    process.env.RESEND_API_KEY = 're_test_mock_api_key_123';
+    process.env.EMAIL_FROM = 'Sattwik Kitchen <noreply@send.sattwikkitchen.ca>';
+
+    // 1. Test Resend API returning an error object { error: { message: ... } }
+    const mockApiErrorResend = {
+      emails: {
+        send: async () => {
+          return { data: null, error: { message: 'Domain send.sattwikkitchen.ca is not verified', name: 'validation_error' } };
+        }
+      }
+    };
+
+    let loggedError = '';
+    const origConsoleError = console.error;
+    console.error = (...args) => {
+      loggedError += args.join(' ');
+    };
+
+    _setResendClientForTesting(mockApiErrorResend);
+
+    try {
+      await assert.rejects(
+        () => sendPasswordResetEmail({
+          to: 'customer.err@example.com',
+          name: 'Err User',
+          accountType: 'customer',
+          rawToken: 'token-err-789'
+        }),
+        /Email delivery failed: Domain send\.sattwikkitchen\.ca is not verified/
+      );
+
+      // Verify safe logging: contains masked email, does not contain API key or raw token
+      assert.ok(loggedError.includes('cu***@example.com'), 'Must mask recipient email in error log');
+      assert.ok(!loggedError.includes('re_test_mock_api_key_123'), 'Must NOT log secret API key');
+      assert.ok(!loggedError.includes('token-err-789'), 'Must NOT log raw token in error details');
+
+      // 2. Test Resend throwing a network exception
+      loggedError = '';
+      const mockNetworkErrorResend = {
+        emails: {
+          send: async () => {
+            throw new Error('fetch failed: connect ETIMEDOUT');
+          }
+        }
+      };
+      _setResendClientForTesting(mockNetworkErrorResend);
+
+      await assert.rejects(
+        () => sendPasswordResetEmail({
+          to: 'customer.timeout@example.com',
+          name: 'Timeout User',
+          accountType: 'customer',
+          rawToken: 'token-timeout-000'
+        }),
+        /Email delivery failed: fetch failed/
+      );
+
+      assert.ok(loggedError.includes('cu***@example.com'), 'Must mask recipient email on network exception');
+      assert.ok(!loggedError.includes('re_test_mock_api_key_123'), 'Must NOT log API key on exception');
+    } finally {
+      console.error = origConsoleError;
+      _setResendClientForTesting(null);
+      process.env = origEnv;
+    }
+  });
+
+  // ─── 17. Startup Status Logger Output ─────────────────────────────────────
+  await t.test('17. Startup Status Logger: Correctly reports active provider (Resend, SMTP, or notice)', () => {
+    const { logEmailStatusOnStartup } = require('../server/utils/emailService');
+    const origEnv = { ...process.env };
+
+    let loggedLog = '';
+    let loggedWarn = '';
+    const origConsoleLog = console.log;
+    const origConsoleWarn = console.warn;
+    console.log = (...args) => { loggedLog += args.join(' ') + '\n'; };
+    console.warn = (...args) => { loggedWarn += args.join(' ') + '\n'; };
+
+    try {
+      // 1. Resend active
+      process.env.RESEND_API_KEY = 're_test_123';
+      process.env.EMAIL_FROM = 'Sattwik Kitchen <noreply@send.sattwikkitchen.ca>';
+      logEmailStatusOnStartup();
+      assert.ok(loggedLog.includes('Resend email service configured'), 'Must report Resend email service configured');
+      assert.ok(loggedLog.includes('noreply@send.sattwikkitchen.ca'), 'Must show from sender');
+
+      // 2. SMTP active
+      loggedLog = '';
+      delete process.env.RESEND_API_KEY;
+      process.env.SMTP_HOST = 'smtp.gmail.com';
+      process.env.SMTP_USER = 'test@example.com';
+      process.env.SMTP_PASS = 'pass';
+      logEmailStatusOnStartup();
+      assert.ok(loggedLog.includes('SMTP email service configured'), 'Must report SMTP email service configured');
+
+      // 3. Neither active
+      delete process.env.SMTP_HOST;
+      delete process.env.SMTP_USER;
+      delete process.env.SMTP_PASS;
+      logEmailStatusOnStartup();
+      assert.ok(loggedWarn.includes('Neither Resend nor SMTP email provider is configured'), 'Must warn when neither is configured');
+    } finally {
+      console.log = origConsoleLog;
+      console.warn = origConsoleWarn;
       process.env = origEnv;
     }
   });

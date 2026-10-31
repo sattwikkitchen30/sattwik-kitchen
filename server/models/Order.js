@@ -74,6 +74,17 @@ const orderSchema = new mongoose.Schema({
   customRequest: { type: String, default: '' },
   customerFeedback: { type: Map, of: String, default: undefined },
   comments: { type: [commentSchema], default: [] },
+  manualDeliveryNotifications: {
+    type: [{
+      notifiedAt: { type: Date, default: Date.now },
+      deliveryMemberId: { type: mongoose.Schema.Types.ObjectId, ref: 'DeliveryMember' },
+      recipientPhone: { type: String, default: '' },
+      channel: { type: String, default: 'whatsapp' },
+      orderStatus: { type: String, default: '' }
+    }],
+    default: []
+  },
+  lastNotifiedAt: { type: Date, default: null },
   whatsappDeliveryNotifications: {
     type: [{
       deliveryDate: { type: Date },

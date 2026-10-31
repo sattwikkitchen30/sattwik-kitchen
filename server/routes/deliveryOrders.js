@@ -93,4 +93,45 @@ router.put('/:id/status', deliveryAuthRequired, async (req, res) => {
   });
 });
 
+router.post('/:id/notify', deliveryAuthRequired, async (req, res) => {
+  const order = await Order.findById(req.params.id);
+  if (!order || String(order.deliveryMemberId) !== String(req.deliveryMember._id)
+    || !(order.items || []).some((item) => item.fulfillment === 'delivery')) {
+    return res.status(404).json({ message: 'Order not found or not assigned to you.' });
+  }
+
+  const currentStatus = String(order.status || '').toUpperCase();
+  if (currentStatus !== 'DELIVERED') {
+    return res.status(400).json({ message: 'Notifications can only be sent once the order is marked as Delivered.' });
+  }
+
+  const customer = getOrderCustomer(order) || {};
+  const recipientPhone = String(customer.phone || '').trim();
+  const now = new Date();
+
+  order.manualDeliveryNotifications = order.manualDeliveryNotifications || [];
+  order.manualDeliveryNotifications.push({
+    notifiedAt: now,
+    deliveryMemberId: req.deliveryMember._id,
+    recipientPhone,
+    channel: 'whatsapp',
+    orderStatus: currentStatus
+  });
+  order.lastNotifiedAt = now;
+  await order.save();
+
+  const populated = await Order.findById(order._id).populate('customer', 'firstName lastName phone email address area').populate('deliveryMemberId', 'name phone email').lean();
+  populated.customer = getOrderCustomer(populated);
+  populated.customerDoc = populated.customer;
+  populated.deliveryAddress = populated.customer.address || populated.customer.area || populated.deliveryAddress || populated.customerSnapshot?.address || '';
+
+  emitOrderUpdate(req.app, populated);
+
+  res.json({
+    success: true,
+    message: 'Delivery notification logged successfully.',
+    lastNotifiedAt: order.lastNotifiedAt
+  });
+});
+
 module.exports = router;

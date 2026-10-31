@@ -38,6 +38,34 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+function formatWhatsAppPhone(phone) {
+  if (!phone || typeof phone !== 'string') return null;
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length === 10) return '1' + digits;
+  if (digits.length >= 11) return digits;
+  return null;
+}
+
+function buildDeliveryNotifyMessage(order) {
+  const customer = order.customer || {};
+  const customerName = [customer.firstName, customer.lastName].filter(Boolean).join(' ').trim() || 'Valued Customer';
+  const orderId = order.orderId ? ('#' + order.orderId) : 'your order';
+  const address = customer.address || customer.area || order.deliveryAddress || 'your address';
+
+  return [
+    'Hello ' + customerName + ',',
+    '',
+    'Your Sattwik Kitchen order ' + orderId + ' has been delivered at your address:',
+    address,
+    '',
+    'Thank you for choosing Sattwik Kitchen! We hope you enjoy your meal.',
+    '',
+    'Warm regards,',
+    'Sattwik Kitchen Delivery'
+  ].join('\n');
+}
+
 function deliveryStatusLabel(status) {
   return ({
     PENDING: 'Pending',
@@ -53,7 +81,15 @@ function orderCard(order) {
   const activeLabel = ['ACCEPTED', 'OUT_FOR_DELIVERY'].includes(order.status) ? '<strong class="active-delivery-label">MY ACTIVE DELIVERY</strong>' : '';
   const acceptedTime = order.acceptedAt ? `<div><strong>Accepted</strong><br>${new Date(order.acceptedAt).toLocaleString('en-US', { timeZone: 'America/Vancouver' })}</div>` : '';
   const terminal = ['DELIVERED', 'CANCELLED'].includes(order.status) || Boolean(order.firstDeliveredAt || order.deliveredAt);
-  return `<article class="delivery-order assigned-delivery" data-delivery-order="${escapeHtml(order._id)}">${activeLabel}<div class="delivery-order-head"><div><h2>${escapeHtml(order.orderId)}</h2><p>${escapeHtml(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())} • ${escapeHtml(customer.phone || '')}<br>${escapeHtml(customer.email || '')}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${escapeHtml(customer.address || customer.area || order.deliveryAddress || 'Not provided')}</div><div><strong>Current status</strong><br>${escapeHtml(deliveryStatusLabel(order.status))}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${escapeHtml(order._id)}" data-next-status="${escapeHtml(next || '')}" ${next ? '' : 'disabled'}>${escapeHtml(actionText || 'Complete')}</button><button type="button" data-cancel-delivery="${escapeHtml(order._id)}" ${terminal ? 'disabled' : ''}>Cancel Order</button></div></article>`;
+  const isDelivered = String(order.status || '').toUpperCase() === 'DELIVERED';
+  const hasValidPhone = Boolean(formatWhatsAppPhone(customer.phone));
+  const canNotify = isDelivered && hasValidPhone;
+  const notifyTooltip = !isDelivered
+    ? 'Notify button is enabled once the order is marked as Delivered'
+    : (!hasValidPhone ? 'Customer phone number is missing or invalid' : 'Send WhatsApp delivery confirmation to customer');
+  const notifiedText = order.lastNotifiedAt ? ('Notified ' + new Date(order.lastNotifiedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Vancouver' })) : '';
+  const notifiedBadge = notifiedText ? ('<span class="notified-badge" title="' + escapeHtml(notifiedText) + '">✓ ' + escapeHtml(notifiedText) + '</span>') : '';
+  return `<article class="delivery-order assigned-delivery" data-delivery-order="${escapeHtml(order._id)}">${activeLabel}<div class="delivery-order-head"><div><h2>${escapeHtml(order.orderId)}</h2><p>${escapeHtml(`${customer.firstName || ''} ${customer.lastName || ''}`.trim())} • ${escapeHtml(customer.phone || '')}<br>${escapeHtml(customer.email || '')}</p></div><strong class="delivery-order-total">${money(order.totalAmount)}</strong></div><div class="delivery-details"><div><strong>Address</strong><br>${escapeHtml(customer.address || customer.area || order.deliveryAddress || 'Not provided')}</div><div><strong>Current status</strong><br>${escapeHtml(deliveryStatusLabel(order.status))}</div>${acceptedTime}<div class="delivery-items"><strong>Delivery products</strong>${(order.items || []).filter((item) => item.fulfillment === 'delivery').map((item) => `<span>${escapeHtml(item.productName)} × ${Number(item.quantity) || 0}</span>`).join('')}</div></div><div class="delivery-action"><button data-order-id="${escapeHtml(order._id)}" data-next-status="${escapeHtml(next || '')}" ${next ? '' : 'disabled'}>${escapeHtml(actionText || 'Complete')}</button><button type="button" class="delivery-button notify-button" data-notify-order="${escapeHtml(order._id)}" ${canNotify ? '' : 'disabled'} title="${escapeHtml(notifyTooltip)}">Notify</button><button type="button" data-cancel-delivery="${escapeHtml(order._id)}" ${terminal ? 'disabled' : ''}>Cancel Order</button>${notifiedBadge}</div></article>`;
 }
 
 async function loadDeliveryOrders() {
@@ -65,6 +101,42 @@ async function loadDeliveryOrders() {
       button.disabled = true;
       try { await deliveryApi(`/delivery-orders/${button.dataset.orderId}/status`, { method: 'PUT', body: JSON.stringify({ status: button.dataset.nextStatus }) }); await loadDeliveryOrders(); }
       catch (error) { deliveryMessage.textContent = error.message; await loadDeliveryOrders(); }
+    }));
+    document.querySelectorAll('[data-notify-order]').forEach((button) => button.addEventListener('click', async () => {
+      const orderId = button.dataset.notifyOrder;
+      const order = (data.orders || []).find((o) => String(o._id) === String(orderId));
+      if (!order) return;
+
+      if (String(order.status || '').toUpperCase() !== 'DELIVERED') {
+        alert('Notification can only be sent once the order is marked as Delivered.');
+        return;
+      }
+
+      const customer = order.customer || {};
+      const cleanPhone = formatWhatsAppPhone(customer.phone);
+      if (!cleanPhone) {
+        alert('Customer phone number is not available or valid for WhatsApp notification.');
+        return;
+      }
+
+      const messageText = buildDeliveryNotifyMessage(order);
+      const whatsappUrl = 'https://wa.me/' + cleanPhone + '?text=' + encodeURIComponent(messageText);
+
+      // Open WhatsApp immediately in new tab
+      window.open(whatsappUrl, '_blank', 'noopener');
+
+      // Asynchronously log the notification to the server
+      try {
+        button.disabled = true;
+        const res = await deliveryApi('/delivery-orders/' + orderId + '/notify', { method: 'POST' });
+        if (res && res.lastNotifiedAt) {
+          order.lastNotifiedAt = res.lastNotifiedAt;
+        }
+        await loadDeliveryOrders();
+      } catch (err) {
+        console.error('Failed to log delivery notification:', err);
+        button.disabled = false;
+      }
     }));
     document.querySelectorAll('[data-cancel-delivery]').forEach((button) => button.addEventListener('click', async () => {
       if (button.disabled || !window.confirm('Are you sure you want to cancel this order?')) return;
